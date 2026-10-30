@@ -42,6 +42,26 @@ final class CpeStore: ObservableObject {
 
     private let bridge = CpeBridge.shared
     private var pollTask: Task<Void, Never>?
+    private var lastTick = Date()
+
+    /// 连续失败次数
+    private var _failStreak = 0
+    private var failStreak: Int {
+        get { _failStreak }
+        set { _failStreak = newValue }
+    }
+
+    /// 会话失效时自动重新登录一次
+    func reloginIfNeeded() async {
+        let cfg = Settings.load()
+        guard !cfg.password.isEmpty else { return }
+        let ok = await login(host: cfg.host, user: cfg.user, password: cfg.password)
+        if !ok {
+            // 重登也失败，提示用户
+            toast("连接已断开，请检查网络", kind: .error)
+        }
+    }
+
     private var useNative = false
     @Published var diagLog = ""
 
@@ -182,12 +202,29 @@ final class CpeStore: ObservableObject {
 
     func fetchStatus() async {
         var v: [String: String] = [:]
+        var failed = false
+
         if useNative {
-            v = (try? await CpeNativeAPI.shared.values(CpeNode.overview)) ?? [:]
+            do {
+                v = try await CpeNativeAPI.shared.values(CpeNode.overview)
+            } catch {
+                failed = true
+            }
         } else {
             v = await bridge.fetchValues(CpeNode.overview)
+            if v.isEmpty { failed = true }
         }
-        guard !v.isEmpty else { return }
+
+        // 连续失败计数：超过 2 次就重新登录，恢复被设备踢掉的会话
+        if failed || v.isEmpty {
+            failStreak += 1
+            if failStreak >= 2 {
+                failStreak = 0
+                await reloginIfNeeded()
+            }
+            return
+        }
+        failStreak = 0
 
         // uptime 需用 $post + get_cmd_result_web（multipost 会 400）
         var up: [String: Any] = [:]
@@ -390,13 +427,23 @@ final class CpeStore: ObservableObject {
     func startPolling(force: Bool = true) {
         if !force, pollTask != nil, !(pollTask?.isCancelled ?? true) { return }
         stopPolling()
+        lastTick = Date()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
                 await self.fetchStatus()
+                self.lastTick = Date()
                 let ns = UInt64(max(0.5, self.refreshInterval) * 1_000_000_000)
                 try? await Task.sleep(nanoseconds: ns)
             }
+        }
+    }
+
+    /// 自愈：超过 3 倍间隔无心跳说明轮询被系统挂起，重启它
+    func ensurePollingAlive() {
+        guard isLoggedIn else { return }
+        if Date().timeIntervalSince(lastTick) > max(3.0, refreshInterval * 3) {
+            startPolling(force: true)
         }
     }
 
