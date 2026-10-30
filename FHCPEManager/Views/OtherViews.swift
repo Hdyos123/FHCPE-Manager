@@ -1,6 +1,8 @@
 import SwiftUI
 import UIKit
 
+import SwiftUI
+
 // MARK: - 登录
 
 struct LoginView: View {
@@ -10,156 +12,349 @@ struct LoginView: View {
     @State private var password = ""
     @State private var showPassword = false
     @State private var busy = false
+    @State private var remember = !Settings.load().password.isEmpty
+    @State private var autoLogin = UserDefaults.standard.bool(forKey: "autoLogin")
+    @State private var showLog = false
+    @FocusState private var focus: Field?
+
+    private enum Field { case host, user, pass }
 
     var body: some View {
         NavigationStack {
-        ZStack {
-            Color(.systemGroupedBackground).ignoresSafeArea()
-            ScrollView {
-                VStack(spacing: 22) {
-                    Spacer().frame(height: 40)
+            ZStack {
+                // 浅色渐变背景
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.93, green: 0.95, blue: 1.0),
+                        Color(red: 0.96, green: 0.97, blue: 1.0),
+                        Color(red: 0.94, green: 0.96, blue: 1.0)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
 
-                    VStack(spacing: 10) {
-                        Image(systemName: "wifi.router.fill")
-                            .font(.system(size: 52))
-                            .foregroundStyle(LinearGradient(colors: [.blue, .cyan],
-                                                            startPoint: .top, endPoint: .bottom))
-                        Text("CPE 助手").font(.system(size: 26, weight: .bold))
-                        Text("连接你的 5G 路由器")
-                            .font(.system(size: 13)).foregroundStyle(.secondary)
-                    }
-                    .padding(.bottom, 10)
-
-                    if let err = store.errorText, !err.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack(spacing: 8) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(.red)
-                                Text(err).font(.system(size: 12.5))
-                                    .foregroundStyle(.red)
-                                Spacer()
-                            }
-                            if err.contains("连接") || err.contains("超时") || err.contains("脚本") {
-                                Text("排查：① 手机需连 CPE 的 Wi-Fi（不是蜂窝）② 允许「本地网络」权限 ③ 地址填 192.168.8.1")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                        .padding(12)
-                        .background(RoundedRectangle(cornerRadius: 12)
-                            .fill(Color.red.opacity(0.1)))
-                    }
-
+                ScrollView {
                     VStack(spacing: 0) {
-                        field("设备地址", text: $host, placeholder: "192.168.8.1",
-                              keyboard: .URL, id: "host")
-                        Divider().padding(.leading, 14)
-                        field("账号", text: $user, placeholder: "superadmin", id: "user")
-                        Divider().padding(.leading, 14)
-                        passwordField
-                    }
-                    .background(RoundedRectangle(cornerRadius: 16).fill(.background))
-                    .overlay(RoundedRectangle(cornerRadius: 16)
-                        .strokeBorder(Color.secondary.opacity(0.15), lineWidth: 1))
+                        Spacer().frame(height: 56)
 
-                    Button {
-                        Task {
-                            // 前置校验，避免提交空值导致设备返回 4|0
-                            let h = host.trimmingCharacters(in: .whitespacesAndNewlines)
-                            let u = user.trimmingCharacters(in: .whitespacesAndNewlines)
-                            if h.isEmpty { store.errorText = "请填写设备地址"; return }
-                            if u.isEmpty { store.errorText = "请填写账号"; return }
-                            if password.isEmpty {
-                                let saved = Settings.load().password
-                                if saved.isEmpty {
-                                    store.errorText = "请输入密码"
-                                    return
-                                }
-                            }
-                            busy = true
-                            store.errorText = nil
-                            let pwd = password.isEmpty ? Settings.load().password : password
-                            let ok = await store.login(host: h, user: u, password: pwd)
-                            busy = false
-                            if ok { store.startPolling() }
-                        }
-                    } label: {
-                        HStack {
-                            if busy { ProgressView().tint(.white) }
-                            Text(busy ? "正在连接…" : "测试并保存")
-                                .font(.system(size: 16, weight: .semibold))
-                        }
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 52)
-                        .foregroundStyle(.white)
-                        .background(RoundedRectangle(cornerRadius: 15)
-                            .fill(LinearGradient(colors: [.blue, .blue.opacity(0.85)],
-                                                 startPoint: .topLeading,
-                                                 endPoint: .bottomTrailing)))
-                    }
-                    .disabled(busy || password.isEmpty)
+                        // 标题（去掉图标与副标题）
+                        Text("FiberHome Manager")
+                            .font(.system(size: 32, weight: .heavy))
+                            .foregroundStyle(Color(white: 0.08))
+                            .padding(.top, 70)
 
-                    NavigationLink {
-                        DiagView()
-                            .environmentObject(store)
-                    } label: {
-                        HStack {
-                            Image(systemName: "stethoscope")
-                            Text("连接诊断").font(.system(size: 13, weight: .medium))
+                        // 错误提示
+                        if let err = store.errorText, !err.isEmpty {
+                            errorBanner(err)
+                                .padding(.top, 20)
                         }
-                        .foregroundStyle(.blue)
-                    }
-                    .padding(.top, 6)
 
-                    VStack(spacing: 6) {
-                        Label("请确保手机已连接该 CPE 的 Wi-Fi", systemImage: "wifi")
-                        Label("密码保存在系统钥匙串，不会明文存储", systemImage: "lock.shield")
+                        // 表单卡片
+                        formCard
+                            .padding(.top, 26)
+
+                        // 底部说明
+                        Text("请确保手机已连接该路由器的 Wi-Fi，密码仅保存在本机。")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Color(white: 0.6))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 40)
+                            .padding(.top, 18)
+
+                        // 日志
+                        logSection
+                            .padding(.top, 24)
+
+                        Spacer().frame(height: 30)
                     }
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 4)
                 }
-                .padding(.horizontal, 22)
+                .scrollDismissesKeyboard(.interactively)
             }
-        }
+            .navigationBarHidden(true)
         }
     }
 
-    private func field(_ label: String, text: Binding<String>, placeholder: String,
-                       keyboard: UIKeyboardType = .default, id: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label).font(.system(size: 11.5)).foregroundStyle(.secondary)
+    // MARK: - 表单卡片
+
+    private var formCard: some View {
+        VStack(spacing: 14) {
+            // 路由器
+            inputRow(icon: nil, label: "路由器", text: $host,
+                     placeholder: "192.168.8.1", field: .host,
+                     keyboard: .URL)
+
+            // 账号
+            // 账号：为空时显示极淡的默认账号提示（不抢眼，忘记时可参考）
+            HStack(spacing: 10) {
+                Text("账号")
+                    .font(.system(size: 15))
+                    .foregroundStyle(Color(white: 0.5))
+                    .frame(width: 52, alignment: .leading)
+
+                ZStack(alignment: .leading) {
+                    if user.isEmpty {
+                        Text("默认 superadmin / admin")
+                            .font(.system(size: 15))
+                            .foregroundStyle(Color(white: 0.78))   // 极淡
+                            .allowsHitTesting(false)
+                    }
+                    TextField("", text: $user)
+                        .font(.system(size: 16))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .focused($focus, equals: .user)
+                }
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 56)
+            .background(fieldBackground)
+            .onChange(of: user) { newValue in
+                // 账号被删空时，立即收起明文密码
+                if newValue.trimmingCharacters(in: .whitespaces).isEmpty {
+                    showPassword = false
+                }
+            }
+
+            // 密码
+            HStack(spacing: 10) {
+                Text("密码")
+                    .font(.system(size: 15))
+                    .foregroundStyle(Color(white: 0.5))
+                    .frame(width: 52, alignment: .leading)
+
+                Group {
+                    if showPassword {
+                        TextField("请输入密码", text: $password)
+                    } else {
+                        SecureField("请输入密码", text: $password)
+                    }
+                }
+                .font(.system(size: 16))
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .focused($focus, equals: .pass)
+
+                // 一键清空（有内容时才显示）
+                if !password.isEmpty {
+                    Button {
+                        password = ""
+                        showPassword = false      // 清空后收起明文
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 15))
+                            .foregroundStyle(Color(white: 0.72))
+                    }
+                    .transition(.opacity)
+                }
+
+                // 眼睛：账号为空时禁用（无从校验归属，避免误展示）
+                let canReveal = !user.trimmingCharacters(in: .whitespaces).isEmpty
+                Button {
+                    guard canReveal else { return }
+                    showPassword.toggle()
+                } label: {
+                    Image(systemName: showPassword ? "eye.slash" : "eye")
+                        .font(.system(size: 15))
+                        .foregroundStyle(canReveal ? Color(white: 0.6)
+                                                   : Color(white: 0.85))
+                }
+                .disabled(!canReveal)
+                .animation(.easeInOut(duration: 0.2), value: password.isEmpty)
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 56)
+            .background(fieldBackground)
+
+            // 开关
+            VStack(spacing: 0) {
+                switchRow("记住密码", isOn: $remember)
+                switchRow("自动登录", isOn: $autoLogin)
+            }
+            .padding(.top, 2)
+
+            // 连接按钮
+            Button {
+                Task { await doLogin() }
+            } label: {
+                HStack(spacing: 8) {
+                    if busy {
+                        ProgressView()
+                            .tint(Color(white: 0.25))
+                    }
+                    Text(busy ? "正在连接…" : "连接路由器")
+                        .font(.system(size: 16.5, weight: .semibold))
+                        .foregroundStyle(Color(white: 0.15))
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 54)
+                .background(
+                    RoundedRectangle(cornerRadius: 27, style: .continuous)
+                        .fill(Color.white.opacity(0.75))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 27, style: .continuous)
+                        .strokeBorder(Color(white: 0.85), lineWidth: 1)
+                )
+            }
+            .disabled(busy)
+            .padding(.top, 8)
+        }
+        .padding(18)
+        .background(
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(Color.white.opacity(0.55))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.9), lineWidth: 1.2)
+        )
+        .shadow(color: Color(red: 0.6, green: 0.67, blue: 0.95).opacity(0.12),
+                radius: 24, x: 0, y: 10)
+        .padding(.horizontal, 20)
+    }
+
+    private var fieldBackground: some View {
+        RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .fill(Color.white.opacity(0.72))
+    }
+
+    private func inputRow(icon: String?, label: String, text: Binding<String>,
+                          placeholder: String, field: Field,
+                          keyboard: UIKeyboardType = .default) -> some View {
+        HStack(spacing: 10) {
+            Text(label)
+                .font(.system(size: 15))
+                .foregroundStyle(Color(white: 0.5))
+                .frame(width: 52, alignment: .leading)
+
             TextField(placeholder, text: text)
+                .font(.system(size: 16))
                 .keyboardType(keyboard)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-                .font(.system(size: 16))
+                .focused($focus, equals: field)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
+        .padding(.horizontal, 16)
+        .frame(height: 56)
+        .background(fieldBackground)
     }
 
-    private var passwordField: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("密码").font(.system(size: 11.5)).foregroundStyle(.secondary)
-            HStack {
-                if showPassword {
-                    TextField("设备管理密码", text: $password)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                } else {
-                    SecureField(Settings.load().password.isEmpty ? "设备管理密码" : "已保存，留空则沿用", text: $password)
-                }
-                Button { showPassword.toggle() } label: {
-                    Image(systemName: showPassword ? "eye.slash" : "eye")
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .font(.system(size: 16))
+    private func switchRow(_ title: String, isOn: Binding<Bool>) -> some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 16))
+                .foregroundStyle(Color(white: 0.15))
+            Spacer()
+            Toggle("", isOn: isOn)
+                .labelsHidden()
+                .tint(Color(red: 0.35, green: 0.78, blue: 0.42))
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
+        .padding(.horizontal, 6)
+        .frame(height: 50)
+    }
+
+    private func errorBanner(_ msg: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(Color(red: 0.9, green: 0.3, blue: 0.3))
+            Text(msg)
+                .font(.system(size: 12.5))
+                .foregroundStyle(Color(red: 0.8, green: 0.2, blue: 0.2))
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(red: 1.0, green: 0.93, blue: 0.93))
+        )
+        .padding(.horizontal, 20)
+    }
+
+    // MARK: - 日志
+
+    private var logSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { showLog.toggle() }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: showLog ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("详细日志")
+                        .font(.system(size: 12.5))
+                }
+                .foregroundStyle(Color(white: 0.45))
+            }
+            .padding(.leading, 24)
+
+            if showLog {
+                VStack(alignment: .leading, spacing: 4) {
+                    if CpeNativeAPI.trace.isEmpty {
+                        Text("暂无日志")
+                            .foregroundStyle(Color(white: 0.6))
+                    } else {
+                        ForEach(Array(CpeNativeAPI.trace.enumerated()), id: \.offset) { _, line in
+                            Text(line)
+                                .foregroundStyle(Color(white: 0.35))
+                        }
+                    }
+                }
+                .font(.system(size: 10.5, design: .monospaced))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.white.opacity(0.5))
+                )
+                .padding(.horizontal, 24)
+            }
+
+            // 诊断入口
+            NavigationLink {
+                DiagView().environmentObject(store)
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "stethoscope")
+                        .font(.system(size: 11))
+                    Text("连接诊断")
+                        .font(.system(size: 12.5))
+                }
+                .foregroundStyle(Color(red: 0.35, green: 0.5, blue: 0.95))
+            }
+            .padding(.leading, 24)
+        }
+    }
+
+    // MARK: - 登录
+
+    private func doLogin() async {
+        let h = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        let u = user.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !h.isEmpty else { store.errorText = "请填写路由器地址"; return }
+        guard !u.isEmpty else { store.errorText = "请填写账号"; return }
+        guard !password.isEmpty else { store.errorText = "请输入密码"; return }
+
+        busy = true
+        store.errorText = nil
+        let ok = await store.login(host: h, user: u, password: password)
+        busy = false
+        if ok {
+            // 记住密码：写入钥匙串；否则清掉
+            if remember {
+                Settings(host: h, user: u, password: password).save()
+                UserDefaults.standard.set(autoLogin, forKey: "autoLogin")
+            } else {
+                Settings.clearPassword()
+                UserDefaults.standard.set(false, forKey: "autoLogin")
+            }
+            if autoLogin {
+                UserDefaults.standard.set(true, forKey: "autoLogin")
+            }
+            store.startPolling()
+        }
     }
 }
 
@@ -169,6 +364,9 @@ struct ControlView: View {
     @EnvironmentObject var store: CpeStore
     @State private var pendingToggle: (node: String, on: Bool, label: String)?
     @State private var showReboot = false
+    /// 本地覆盖：点击后立即反映，避免开关弹回
+    @State private var localOverride: [String: Bool] = [:]
+    @State private var busyNode: String?
 
     var body: some View {
         NavigationStack {
@@ -202,10 +400,23 @@ struct ControlView: View {
             )) {
                 Button("取消", role: .cancel) { pendingToggle = nil }
                 Button("确定") {
-                    if let p = pendingToggle {
-                        Task { _ = await store.setToggle(node: p.node, on: p.on) }
-                    }
+                    guard let p = pendingToggle else { return }
                     pendingToggle = nil
+                    busyNode = p.node
+                    localOverride[p.node] = p.on          // 立即反映
+                    Task {
+                        let ok = await store.setToggle(node: p.node, on: p.on)
+                        busyNode = nil
+                        if !ok {
+                            localOverride.removeValue(forKey: p.node)   // 失败回滚
+                            store.toast("设置失败，请重试")
+                        } else if let e = store.errorText, !e.isEmpty {
+                            store.toast(e)
+                        } else {
+                            try? await Task.sleep(nanoseconds: 1_200_000_000)
+                            localOverride.removeValue(forKey: p.node)   // 以服务器为准
+                        }
+                    }
                 }
             } message: {
                 if let p = pendingToggle {
@@ -225,7 +436,8 @@ struct ControlView: View {
 
     private func toggleRow(_ title: String, _ sub: String,
                            _ node: String, _ key: String) -> some View {
-        let isOn = store.status[key] == "1"
+        let serverOn = store.status[key] == "1"
+        let isOn = localOverride[node] ?? serverOn
         return Toggle(isOn: Binding(
             get: { isOn },
             set: { newValue in
