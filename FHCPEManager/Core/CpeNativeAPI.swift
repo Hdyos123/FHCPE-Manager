@@ -10,7 +10,10 @@ final class CpeNativeAPI {
     private var user: String = "superadmin"
     private var pass: String = ""
     private var sid: String = ""
-    private let iv = Data("pqrstuvwxyz{|}~".utf8)
+    /// AES-CBC 初始向量：ASCII 0x70...0x7F（共 16 字节）
+    /// 注意末尾是 0x7F (DEL)，不可见字符，不能用字符串字面量
+    /// 等价于 Python 的 bytes(range(112, 128))
+    private let iv = Data((112...127).map { UInt8($0) })
 
     /// 诊断：记录每一步原始响应
     static var trace: [String] = []
