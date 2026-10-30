@@ -101,6 +101,7 @@ struct LoginView: View {
                     }
                     TextField("", text: $user)
                         .font(.system(size: 16))
+                        .foregroundStyle(.primary)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .focused($focus, equals: .user)
@@ -126,8 +127,10 @@ struct LoginView: View {
                 Group {
                     if showPassword {
                         TextField("请输入密码", text: $password)
+                            .foregroundStyle(.primary)
                     } else {
                         SecureField("请输入密码", text: $password)
+                            .foregroundStyle(.primary)
                     }
                 }
                 .font(.system(size: 16))
@@ -226,11 +229,12 @@ struct LoginView: View {
         HStack(spacing: 10) {
             Text(label)
                 .font(.system(size: 15))
-                .foregroundStyle(Color(white: 0.5))
+                .foregroundStyle(.secondary)
                 .frame(width: 52, alignment: .leading)
 
             TextField(placeholder, text: text)
                 .font(.system(size: 16))
+                .foregroundStyle(.primary)          // 强制跟随深浅色，避免白底白字
                 .keyboardType(keyboard)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
