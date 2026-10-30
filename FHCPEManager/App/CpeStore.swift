@@ -152,12 +152,18 @@ final class CpeStore: ObservableObject {
         }
         guard !v.isEmpty else { return }
 
-        // uptime 不在 XML 节点里，需单独走 get_cmd_result_web
-        let cmd = await mp("get_cmd_result_web", ["data_1": ["key": "UPTIME"]])
-        if let first = cmd.first, let result = first["result"] as? String {
-            v["uptime"] = result
-        } else if let first = cmd.first, let num = first["result"] as? NSNumber {
-            v["uptime"] = num.stringValue
+        // uptime 需用 $post + get_cmd_result_web（multipost 会 400）
+        var up: [String: Any] = [:]
+        if useNative {
+            up = (try? await CpeNativeAPI.shared.post(
+                "get_cmd_result_web", ["key": "UPTIME"])) ?? [:]
+        } else {
+            up = await bridge.post("get_cmd_result_web", ["key": "UPTIME"])
+        }
+        if let r = up["result"] as? String {
+            v["uptime"] = r
+        } else if let n = up["result"] as? NSNumber {
+            v["uptime"] = n.stringValue
         }
 
         status.raw = v
@@ -349,7 +355,7 @@ final class CpeStore: ObservableObject {
             while !Task.isCancelled {
                 guard let self else { return }
                 await self.fetchStatus()
-                let ns = UInt64(max(0.3, self.refreshInterval) * 1_000_000_000)
+                let ns = UInt64(max(0.5, self.refreshInterval) * 1_000_000_000)
                 try? await Task.sleep(nanoseconds: ns)
             }
         }
