@@ -52,6 +52,7 @@ struct DeviceSheet: View {
                     .padding(.vertical, 3)
                 }
             }
+            .glassListStyle()
             .navigationTitle("设备列表")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
