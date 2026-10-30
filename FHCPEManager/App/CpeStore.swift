@@ -49,6 +49,17 @@ final class CpeStore: ObservableObject {
         isLoading = true
         defer { isLoading = false }
 
+        // 切换到新设备前清空旧数据，避免型号/信号残留
+        let prevHost = Settings.load().host
+        if prevHost != host {
+            status = CpeStatus()
+            hosts = []
+            carriers = []
+            realtimeRx = 0
+            realtimeTx = 0
+            CpeNativeAPI.trace = []
+        }
+
         // 前置校验
         guard !host.trimmingCharacters(in: .whitespaces).isEmpty else {
             errorText = "请填写设备地址"; return false
