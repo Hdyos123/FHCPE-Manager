@@ -9,7 +9,7 @@ struct LoginView: View {
     @EnvironmentObject var store: CpeStore
     @State private var host = Settings.load().host
     @State private var user = Settings.load().user
-    @State private var password = ""
+    @State private var password = Settings.load().password   // 已记住则自动填入
     @State private var showPassword = false
     @State private var busy = false
     @State private var remember = !Settings.load().password.isEmpty
@@ -758,6 +758,25 @@ struct SettingsView: View {
                     Text("数据刷新")
                 }
 
+                // ── 显示 ──
+                Section {
+                    Toggle(isOn: Binding(
+                        get: { UserDefaults.standard.bool(forKey: "keepAwake") },
+                        set: { v in
+                            UserDefaults.standard.set(v, forKey: "keepAwake")
+                            UIApplication.shared.isIdleTimerDisabled = v
+                            Haptic.medium()
+                            store.toast(v ? "屏幕保持常亮" : "已恢复自动锁屏", kind: .info)
+                        }
+                    )) {
+                        Label("屏幕常亮", systemImage: "sun.max")
+                    }
+                } header: {
+                    Text("显示")
+                } footer: {
+                    Text("分屏挂机看流量时建议开启，否则系统会自动锁屏暂停刷新。")
+                }
+
                 // ── 连接诊断 ──
                 Section {
                     NavigationLink {
@@ -790,7 +809,7 @@ struct SettingsView: View {
                 Section {
                     Button("退出登录", role: .destructive) {
                         Haptic.warning()
-                        Settings.clearPassword()
+                        // 只退出会话，保留已记住的密码，下次免输入
                         store.isLoggedIn = false
                         store.stopPolling()
                     }
