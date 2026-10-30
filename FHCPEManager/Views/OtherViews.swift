@@ -63,9 +63,22 @@ struct LoginView: View {
 
                     Button {
                         Task {
+                            // 前置校验，避免提交空值导致设备返回 4|0
+                            let h = host.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let u = user.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if h.isEmpty { store.errorText = "请填写设备地址"; return }
+                            if u.isEmpty { store.errorText = "请填写账号"; return }
+                            if password.isEmpty {
+                                let saved = Settings.load().password
+                                if saved.isEmpty {
+                                    store.errorText = "请输入密码"
+                                    return
+                                }
+                            }
                             busy = true
                             store.errorText = nil
-                            let ok = await store.login(host: host, user: user, password: password)
+                            let pwd = password.isEmpty ? Settings.load().password : password
+                            let ok = await store.login(host: h, user: u, password: pwd)
                             busy = false
                             if ok { store.startPolling() }
                         }
@@ -121,7 +134,7 @@ struct LoginView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 } else {
-                    SecureField("设备管理密码", text: $password)
+                    SecureField(Settings.load().password.isEmpty ? "设备管理密码" : "已保存，留空则沿用", text: $password)
                 }
                 Button { showPassword.toggle() } label: {
                     Image(systemName: showPassword ? "eye.slash" : "eye")
