@@ -267,10 +267,10 @@ struct HomeView: View {
             VStack(spacing: 2) {
                 Image(systemName: name)
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(Color(white: 0.40))
+                    .foregroundStyle(.secondary)
                 Text(title)
                     .font(.system(size: 8.5, weight: .medium))
-                    .foregroundStyle(Color(white: 0.55))
+                    .foregroundStyle(.secondary)
             }
             .frame(width: 42, height: 42)
             .glassCard(radius: 12)
@@ -345,7 +345,7 @@ struct HomeView: View {
             Spacer(minLength: 0)
             Text(label)
                 .font(.system(size: 11))
-                .foregroundStyle(Color(white: 0.52))
+                .foregroundStyle(.secondary)
                 .frame(height: 15)
 
             HStack(alignment: .firstTextBaseline, spacing: 1) {
@@ -403,7 +403,7 @@ struct HomeView: View {
                         .foregroundStyle(color)
                         .frame(height: 18)
                         .padding(.horizontal, 7)
-                        .background(Capsule().fill(Color.white.opacity(0.95)))
+                        .background(Capsule().fill(Color(.systemBackground)))
                         .overlay(Capsule().strokeBorder(color.opacity(0.4), lineWidth: 1))
                 }
                 .offset(x: 4, y: -4)                // 压在卡片右上角边框上
@@ -470,7 +470,7 @@ struct HomeView: View {
             Spacer(minLength: 0)
             Text(label)
                 .font(.system(size: 11))
-                .foregroundStyle(Color(white: 0.52))
+                .foregroundStyle(.secondary)
                 .frame(height: 15)
 
             HStack(alignment: .firstTextBaseline, spacing: 1) {
@@ -499,7 +499,7 @@ struct HomeView: View {
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(color)
                         .frame(width: 20, height: 20)
-                        .background(Circle().fill(Color.white.opacity(0.95)))
+                        .background(Circle().fill(Color(.systemBackground)))
                         .overlay(Circle().strokeBorder(color.opacity(0.4), lineWidth: 1))
                 }
                 .buttonStyle(.plain)
@@ -756,7 +756,7 @@ struct HomeView: View {
                 Spacer()
                 Text(trafficIntervalText)
                     .font(.system(size: 9))
-                    .foregroundStyle(Color(white: 0.62))
+                    .foregroundStyle(.secondary.opacity(0.8))
             }
 
             // 一组：今日 / 本月，横排三项
@@ -783,13 +783,12 @@ struct HomeView: View {
                 .frame(width: 30, alignment: .leading)
                 .padding(.top, 1)
 
-            Spacer(minLength: 2)
-
             trafficCell("下行", rx, .blue, dRx)
-            Spacer(minLength: 2)
+                .frame(maxWidth: .infinity, alignment: .leading)
             trafficCell("上行", tx, .orange, dTx)
-            Spacer(minLength: 2)
+                .frame(maxWidth: .infinity, alignment: .leading)
             trafficCell("合计", total, .secondary, 0)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -808,13 +807,12 @@ struct HomeView: View {
                 .foregroundStyle(color)
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
-            if delta > 0 {
-                Text("+ " + compactBytes(delta))
-                    .font(.system(size: 8.5, weight: .semibold))
-                    .foregroundStyle(color.opacity(0.7))
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-            }
+            // 增量行始终占位（无增量时空一行），保证三项等高对齐
+            Text(delta > 0 ? "+ " + compactBytes(delta) : " ")
+                .font(.system(size: 8.5, weight: .semibold))
+                .foregroundStyle(color.opacity(0.7))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
     }
 
