@@ -375,6 +375,19 @@ final class CpeBridge: NSObject, ObservableObject {
         return arr
     }
 
+    /// 通用 POST（返回 {"data":[...]} 结构）
+    func post(_ method: String, _ dataObj: [String: Any]) async -> [String: Any] {
+        let dj = (try? JSONSerialization.data(withJSONObject: dataObj)) ?? Data("{}".utf8)
+        let ds = String(data: dj, encoding: .utf8) ?? "{}"
+        let body = """
+        function(){
+          return $post('\(jsEscape(method))', \(ds))
+            .then(function(r){ return (r && r.data) ? r.data : (r || {}); });
+        }
+        """
+        return (await jsCall(body) as? [String: Any]) ?? [:]
+    }
+
     func setSingle(url: String, value: String) async -> Bool {
         guard ready else { return false }
         let body = """
