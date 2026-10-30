@@ -28,13 +28,21 @@ struct LoginView: View {
                     }
                     .padding(.bottom, 10)
 
-                    if let err = store.errorText {
-                        HStack(spacing: 8) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.red)
-                            Text(err).font(.system(size: 12.5))
-                                .foregroundStyle(.red)
-                            Spacer()
+                    if let err = store.errorText, !err.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.red)
+                                Text(err).font(.system(size: 12.5))
+                                    .foregroundStyle(.red)
+                                Spacer()
+                            }
+                            if err.contains("连接") || err.contains("超时") || err.contains("脚本") {
+                                Text("排查：① 手机需连 CPE 的 Wi-Fi（不是蜂窝）② 允许「本地网络」权限 ③ 地址填 192.168.8.1")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                         .padding(12)
                         .background(RoundedRectangle(cornerRadius: 12)
@@ -56,6 +64,7 @@ struct LoginView: View {
                     Button {
                         Task {
                             busy = true
+                            store.errorText = nil
                             let ok = await store.login(host: host, user: user, password: password)
                             busy = false
                             if ok { store.startPolling() }
