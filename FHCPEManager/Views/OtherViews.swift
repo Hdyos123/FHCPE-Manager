@@ -98,6 +98,18 @@ struct LoginView: View {
                     }
                     .disabled(busy || password.isEmpty)
 
+                    NavigationLink {
+                        DiagView()
+                            .environmentObject(store)
+                    } label: {
+                        HStack {
+                            Image(systemName: "stethoscope")
+                            Text("连接诊断").font(.system(size: 13, weight: .medium))
+                        }
+                        .foregroundStyle(.blue)
+                    }
+                    .padding(.top, 6)
+
                     VStack(spacing: 6) {
                         Label("请确保手机已连接该 CPE 的 Wi-Fi", systemImage: "wifi")
                         Label("密码保存在系统钥匙串，不会明文存储", systemImage: "lock.shield")
@@ -462,77 +474,98 @@ struct DiagView: View {
     @EnvironmentObject var store: CpeStore
     @State private var lines: [String] = []
     @State private var running = false
+    @State private var host = Settings.load().host
+    @State private var user = Settings.load().user
+    @State private var pass = ""
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    if running {
-                        ProgressView("检测中…").padding()
-                    }
-                    ForEach(Array(lines.enumerated()), id: \.offset) { _, l in
-                        Text(l)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(l.hasPrefix("✗") ? .red : .primary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                VStack(spacing: 8) {
+                    TextField("设备地址", text: $host)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .padding(10)
+                        .background(RoundedRectangle(cornerRadius: 10).fill(.background))
+                    TextField("账号", text: $user)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .padding(10)
+                        .background(RoundedRectangle(cornerRadius: 10).fill(.background))
+                    SecureField(Settings.load().password.isEmpty ? "密码" : "已保存，留空则沿用", text: $pass)
+                        .padding(10)
+                        .background(RoundedRectangle(cornerRadius: 10).fill(.background))
                 }
-                .padding(14)
-            }
-            .navigationTitle("连接诊断")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("开始") { Task { await run() } }
-                        .disabled(running)
+
+                Button {
+                    Task { await run() }
+                } label: {
+                    HStack {
+                        if running { ProgressView().padding(.trailing, 6) }
+                        Text(running ? "检测中…" : "开始检测").bold()
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(RoundedRectangle(cornerRadius: 12).fill(Color.blue))
+                    .foregroundStyle(.white)
+                }
+                .disabled(running)
+
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, l in
+                    Text(l)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(l.hasPrefix("✗") ? Color.red : Color.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .task { await run() }
+            .padding(14)
         }
+        .navigationTitle("连接诊断")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     private func run() async {
         running = true
         lines = []
-        let cfg = Settings.load()
-        lines.append("地址: \(cfg.host)")
-        lines.append("账号: \(cfg.user)")
-        lines.append("密码: \(cfg.password.isEmpty ? "未保存" : "已保存")")
+        CpeNativeAPI.trace = []
+
+        let h = host.trimmingCharacters(in: .whitespaces)
+        let u = user.trimmingCharacters(in: .whitespaces)
+        let p = pass.isEmpty ? Settings.load().password : pass
+
+        lines.append("地址: \(h)")
+        lines.append("账号: \(u)")
+        lines.append("密码: \(p.isEmpty ? "空" : "已填 \(p.count) 位")")
         lines.append("")
 
-        // 1. 原生 API 登录
-        CpeNativeAPI.shared.configure(host: cfg.host, user: cfg.user, pass: cfg.password)
+        guard !p.isEmpty else {
+            lines.append("✗ 密码为空，无法测试")
+            running = false
+            return
+        }
+
+        CpeNativeAPI.shared.configure(host: h, user: u, pass: p)
         do {
             try await CpeNativeAPI.shared.login()
-            lines.append("✓ 原生登录成功")
+            lines.append("✓ 登录成功")
+            do {
+                let v = try await CpeNativeAPI.shared.values(CpeNode.overview)
+                lines.append(v.isEmpty ? "✗ 取值返回空" : "✓ 取值 \(v.count) 项")
+                if let m = v["model"] { lines.append("  型号: \(m)") }
+                if let r = v["rsrp"] { lines.append("  RSRP: \(r)") }
+            } catch {
+                lines.append("✗ 取值失败: \(error.localizedDescription)")
+            }
         } catch {
             let m = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            lines.append("✗ 原生登录失败: \(m)")
+            lines.append("✗ 登录失败: \(m)")
         }
 
-        // 2. 取数据
-        do {
-            let v = try await CpeNativeAPI.shared.values(CpeNode.overview)
-            lines.append(v.isEmpty ? "✗ 原生取值返回空" : "✓ 原生取值 \(v.count) 项")
-            if let rsrp = v["rsrp"] {
-                lines.append("  信号 RSRP: \(rsrp)")
-            }
-            if let model = v["model"] {
-                lines.append("  型号: \(model)")
-            }
-        } catch {
-            lines.append("✗ 原生取值异常: \(error.localizedDescription)")
+        if !CpeNativeAPI.trace.isEmpty {
+            lines.append("")
+            lines.append("— 原始响应 —")
+            for t in CpeNativeAPI.trace { lines.append(t) }
         }
-
-        // 3. WebView 状态
-        lines.append("")
-        lines.append("WebView ready: \(CpeBridge.shared.ready ? "是" : "否")")
-        if let e = CpeBridge.shared.lastError, !e.isEmpty {
-            lines.append("WebView 错误: \(e)")
-        }
-        if !store.diagLog.isEmpty {
-            lines.append("登录日志: \(store.diagLog)")
-        }
-
         running = false
     }
 }
