@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 30
 
     steps:
@@ -16,15 +16,28 @@ jobs:
 
       - name: Select Xcode
         run: |
-          sudo xcode-select -s /Applications/Xcode_15.4.app 2>/dev/null || \
-          sudo xcode-select -s /Applications/Xcode.app
+          # 列出可用 Xcode，选版本号最大的
+          ls /Applications | grep -i "^Xcode" || true
+          LATEST=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$LATEST" ]; then sudo xcode-select -s "$LATEST"; fi
           xcodebuild -version
 
       - name: Install XcodeGen
         run: brew install xcodegen
 
       - name: Generate Xcode project
-        run: xcodegen generate
+        run: |
+          xcodegen generate
+          echo "--- 生成结果 ---"
+          ls -d *.xcodeproj
+          OBJ=$(grep -m1 "objectVersion" *.xcodeproj/project.pbxproj | grep -oE "[0-9]+" | head -1)
+          echo "objectVersion = $OBJ"
+          # Xcode 15 最高支持 60；若生成的是 70+ 则降级
+          if [ -n "$OBJ" ] && [ "$OBJ" -gt 60 ]; then
+            echo "工程格式过新（$OBJ），降级为 60"
+            sed -i '' "s/objectVersion = $OBJ;/objectVersion = 60;/" *.xcodeproj/project.pbxproj
+            grep -m1 "objectVersion" *.xcodeproj/project.pbxproj
+          fi
 
       - name: Build (unsigned)
         run: |
