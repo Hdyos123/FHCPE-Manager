@@ -54,31 +54,38 @@ struct BridgeHost: UIViewRepresentable {
 struct MainTabView: View {
     var body: some View {
         TabView {
-            homeTab
-            controlTab
-            lockTab
-            paramTab
-            smsTab
-            settingsTab
+            // 底栏只保留 首页 / 设置
+            HomeView()
+                .tabItem { Label("首页", systemImage: "house.fill") }
+            MoreView()
+                .tabItem { Label("设置", systemImage: "gearshape.fill") }
         }
     }
+}
 
-    private var homeTab: some View {
-        HomeView().tabItem { Label("首页", systemImage: "house.fill") }
-    }
-    private var controlTab: some View {
-        ControlView().tabItem { Label("控制", systemImage: "slider.horizontal.3") }
-    }
-    private var lockTab: some View {
-        LockBandView().tabItem { Label("锁频", systemImage: "lock.fill") }
-    }
-    private var paramTab: some View {
-        ParamView().tabItem { Label("参数", systemImage: "doc.text") }
-    }
-    private var smsTab: some View {
-        SmsView().tabItem { Label("短信", systemImage: "message.fill") }
-    }
-    private var settingsTab: some View {
-        SettingsView().tabItem { Label("设置", systemImage: "gearshape.fill") }
+/// 「更多」：承载控制 / 锁频 / 参数 / 短信
+struct MoreView: View {
+    var body: some View {
+        NavigationStack {
+            List {
+                NavigationLink { ControlView() } label: {
+                    Label("控制", systemImage: "slider.horizontal.3")
+                }
+                NavigationLink { LockBandView() } label: {
+                    Label("锁频", systemImage: "lock.fill")
+                }
+                NavigationLink { ParamView() } label: {
+                    Label("参数", systemImage: "doc.text")
+                }
+                NavigationLink { SmsView() } label: {
+                    Label("短信", systemImage: "message.fill")
+                }
+                NavigationLink { SettingsView() } label: {
+                    Label("设置", systemImage: "gearshape.fill")
+                }
+            }
+            .navigationTitle("更多")
+        }
     }
 }
+
