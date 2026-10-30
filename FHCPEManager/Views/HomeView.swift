@@ -292,16 +292,25 @@ struct HomeView: View {
         return ("弱", .red)
     }
 
-    private func iconBtn(_ name: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: name)
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(Color(white: 0.38))
-                .frame(width: 38, height: 38)     // 正方形，视觉重量一致
-                .glassCard(radius: 12)
+    /// 图标 + 文字的小功能键（42×42）
+    private func iconBtn(_ name: String, _ title: String,
+                         action: @escaping () -> Void) -> some View {
+        Button {
+            Haptic.light()
+            action()
+        } label: {
+            VStack(spacing: 2) {
+                Image(systemName: name)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Color(white: 0.40))
+                Text(title)
+                    .font(.system(size: 8.5, weight: .medium))
+                    .foregroundStyle(Color(white: 0.55))
+            }
+            .frame(width: 42, height: 42)
+            .glassCard(radius: 12)
         }
         .buttonStyle(.plain)
-        .haptic()
     }
 
     /// 连续运行时间：精确到分钟。3 天 5 小时 12 分钟
