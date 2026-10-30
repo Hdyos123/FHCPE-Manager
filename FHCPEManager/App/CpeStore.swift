@@ -166,62 +166,97 @@ final class CpeStore: ObservableObject {
     }
 
     func fetchHosts() async {
-        func query(_ table: String, _ node: [String: Any]) async -> [[String: Any]] {
-            await mp("get_xml_childnode_value", ["data_1": ["url": table, "node": node]])
+        // 统一入口：返回 {"data":[...]} 结构
+        func q(_ url: String, _ node: [String: Any]) async -> [[String: Any]] {
+            let obj: [String: Any]
+            if useNative {
+                obj = (try? await CpeNativeAPI.shared.post(
+                    "get_xml_childnode_value", ["url": url, "node": node])) ?? [:]
+            } else {
+                obj = await bridge.post("get_xml_childnode_value",
+                                        ["url": url, "node": node])
+            }
+            return (obj["data"] as? [[String: Any]]) ?? []
         }
 
-        // 1. Wi-Fi 关联设备（判断真实在线）
-        let wifiRows = await query("LANDevice.1.WLANConfiguration.", [
+        // 1. Wi-Fi 关联设备
+        let wifiRows = await q("LANDevice.1.WLANConfiguration.", [
             "AssociatedDevice": [
                 "url": "AssociatedDevice.",
                 "node": ["MAC": "AssociatedDeviceMACAddress"]
             ]
         ])
 
-        var onlineMacs = Set<String>()
+        var wifiMacs = Set<String>()
         var wifiBand: [String: String] = [:]
         for (i, wl) in wifiRows.enumerated() {
             guard let ads = wl["AssociatedDevice"] as? [[String: Any]] else { continue }
             for ad in ads {
                 let m = (ad["MAC"] as? String ?? "").uppercased()
                 if !m.isEmpty {
-                    onlineMacs.insert(m)
+                    wifiMacs.insert(m)
                     wifiBand[m] = i >= 4 ? "5G Wi-Fi" : "2.4G Wi-Fi"
                 }
             }
         }
 
-        // 2. Hosts 表
-        let hostRows = await query("LANDevice.1.Hosts.Host.", [
-            "HostName": "HostName", "MAC": "MACAddress",
-            "IP": "IPAddress", "Layer2": "Layer2Interface",
-            "Down": "MaxDSBandwidth", "Up": "MaxUSBandwidth"
+        // 2. Hosts 表（名称 / IP / 限速）
+        let hostRows = await q("LANDevice.1.Hosts.Host.", [
+            "HostName": "HostName",
+            "MACAddress": "MACAddress",
+            "IPAddress": "IPAddress",
+            "Layer2Interface": "Layer2Interface",
+            "MaxDSBandwidth": "MaxDSBandwidth",
+            "MaxUSBandwidth": "MaxUSBandwidth"
         ])
 
         var result: [CpeHost] = []
         var seen = Set<String>()
+
         for r in hostRows {
-            let mac = (r["MAC"] as? String ?? "").uppercased()
+            let mac = (r["MACAddress"] as? String ?? "").uppercased()
             guard !mac.isEmpty, !seen.contains(mac) else { continue }
-            let layer = r["Layer2"] as? String ?? ""
-            let ip = (r["IP"] as? String ?? "").trimmingCharacters(in: .whitespaces)
-            let wired = layer.uppercased().contains("ETHERNET")
-            let online = wired ? !ip.isEmpty : onlineMacs.contains(mac)
+
+            let ip = (r["IPAddress"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            let layer = (r["Layer2Interface"] as? String ?? "").uppercased()
+            let isWired = layer.contains("LANETHERNET")
+            let isWifi = layer.contains("WLANCONFIGURATION")
+
+            // 在线判定：有 IP，或出现在 WiFi 关联表里
+            let online = !ip.isEmpty || (isWifi && wifiMacs.contains(mac))
             guard online else { continue }
+
+            let name = (r["HostName"] as? String) ?? "设备"
+            var display = name
+            if name.isEmpty || name == "unknown" {
+                display = wifiMacs.contains(mac) ? "移动设备" : "有线设备"
+            }
+
             seen.insert(mac)
             result.append(CpeHost(
                 idx: String(r["child_node_idx"] as? Int ?? 0),
-                name: (r["HostName"] as? String) ?? "设备",
-                mac: mac, ip: ip,
-                iface: wired ? "Ethernet" : (wifiBand[mac] ?? "Wi-Fi"),
-                downLimit: (r["Down"] as? String) ?? "0",
-                upLimit: (r["Up"] as? String) ?? "0"))
+                name: display,
+                mac: mac,
+                ip: ip,
+                iface: isWired ? "Ethernet" : (wifiBand[mac] ?? "Wi-Fi"),
+                downLimit: (r["MaxDSBandwidth"] as? String) ?? "0",
+                upLimit: (r["MaxUSBandwidth"] as? String) ?? "0"))
         }
-        for mac in onlineMacs where !seen.contains(mac) {
+
+        // 3. 补充 WiFi 在线但 Hosts 表没有的
+        for mac in wifiMacs where !seen.contains(mac) {
             result.append(CpeHost(idx: "", name: "移动设备", mac: mac, ip: "",
                                   iface: wifiBand[mac] ?? "Wi-Fi",
                                   downLimit: "0", upLimit: "0"))
         }
+
+        // 4. 排序：有线优先，其次 5G，最后 2.4G
+        result.sort { a, b in
+            let pa = a.isWired ? 0 : (a.bandLabel.contains("5G") ? 1 : 2)
+            let pb = b.isWired ? 0 : (b.bandLabel.contains("5G") ? 1 : 2)
+            return pa < pb
+        }
+
         hosts = result
     }
 
