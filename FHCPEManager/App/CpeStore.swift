@@ -5,10 +5,23 @@ import SwiftUI
 final class CpeStore: ObservableObject {
     @Published var status = CpeStatus()
     @Published var hosts: [CpeHost] = []
+    @Published var carriers: [CarrierComponent] = []
     @Published var smsList: [CpeSms] = []
     @Published var isLoggedIn = false
     @Published var isLoading = false
     @Published var errorText: String?
+    @Published var toastText: String?
+    private var toastTask: Task<Void, Never>?
+
+    /// 短暂提示
+    func toast(_ msg: String) {
+        toastTask?.cancel()
+        toastText = msg
+        toastTask = Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if !Task.isCancelled { self.toastText = nil }
+        }
+    }
     @Published var lastUpdate = Date()
 
     @Published var realtimeRx: Double = 0
@@ -92,6 +105,9 @@ final class CpeStore: ObservableObject {
     }
 
     func tryAutoLogin() async {
+        // 用户关闭了自动登录就不自动尝试
+        guard UserDefaults.standard.bool(forKey: "autoLogin") ||
+              UserDefaults.standard.object(forKey: "autoLogin") == nil else { return }
         let cfg = Settings.load()
         guard cfg.isConfigured else { return }
 
@@ -121,21 +137,22 @@ final class CpeStore: ObservableObject {
     func fetchAll() async {
         async let a: Void = fetchStatus()
         async let b: Void = fetchHosts()
-        _ = await (a, b)
+        async let c: Void = fetchCarriers()
+        _ = await (a, b, c)
         lastUpdate = Date()
     }
 
 
     // MARK: - 统一数据入口（自动分流 WebView / 原生）
 
-    private func mp(_ method: String, _ data: [String: Any]) async -> [[String: Any]] {
+    func mp(_ method: String, _ data: [String: Any]) async -> [[String: Any]] {
         if useNative {
             return (try? await CpeNativeAPI.shared.multipost(method: method, data: data)) ?? []
         }
         return await bridge.multipost(method: method, data: data)
     }
 
-    private func set1(_ url: String, _ value: String) async -> Bool {
+    func set1(_ url: String, _ value: String) async -> Bool {
         if useNative {
             do { try await CpeNativeAPI.shared.setSingle(url: url, value: value); return true }
             catch { return false }
@@ -349,7 +366,9 @@ final class CpeStore: ObservableObject {
 
     // MARK: - 轮询
 
-    func startPolling() {
+    /// 启动轮询。force=false 时若已在运行则跳过（避免 scenePhase 与 onAppear 重复启动）
+    func startPolling(force: Bool = true) {
+        if !force, pollTask != nil, !(pollTask?.isCancelled ?? true) { return }
         stopPolling()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -377,6 +396,9 @@ final class CpeStore: ObservableObject {
             useNative = true
         }
         await fetchAll()
-        startPolling()
+        startPolling(force: false)
     }
+
+    /// 当前是否有轮询在跑
+    var isPolling: Bool { pollTask != nil && !(pollTask?.isCancelled ?? true) }
 }
