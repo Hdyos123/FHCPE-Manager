@@ -198,6 +198,7 @@ struct LoginView: View {
                 )
             }
             .disabled(busy)
+            .haptic(.medium)
             .padding(.top, 8)
         }
         .padding(18)
@@ -364,60 +365,48 @@ struct ControlView: View {
     @EnvironmentObject var store: CpeStore
     @State private var pendingToggle: (node: String, on: Bool, label: String)?
     @State private var showReboot = false
-    /// 本地覆盖：点击后立即反映，避免开关弹回
     @State private var localOverride: [String: Bool] = [:]
     @State private var busyNode: String?
 
+    private var s: CpeStatus { store.status }
+
     var body: some View {
         NavigationStack {
-            WideAdapter {
-            List {
-                Section("网络开关") {
-                    toggleRow("飞行模式", "关闭所有无线收发",
-                              CpeNode.netSet + "airplan_on", "airplane")
-                    toggleRow("数据漫游", "允许漫游网络接入",
-                              CpeNode.netSet + "RoamingEnable", "roaming")
-                    toggleRow("VoLTE", "高清语音通话",
-                              CpeNode.netSet + "volte_switch", "volte")
-                    toggleRow("载波聚合", "多频段叠加提速",
-                              "X_FH_MobileNetwork.NetworkInfo.CaEnable", "ca")
-                }
+            ScrollView {
+                VStack(spacing: 14) {
+                    statusBanner
 
-                Section("设备操作") {
-                    Button {
-                        showReboot = true
-                    } label: {
-                        Label("重启设备", systemImage: "power")
-                            .foregroundStyle(.red)
+                    // 2×2 开关卡片（一屏可见，无需滚动）
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 10),
+                                        GridItem(.flexible(), spacing: 10)],
+                              spacing: 10) {
+                        switchCard("飞行模式", "airplane",
+                                   CpeNode.netSet + "airplan_on", "airplane", .orange)
+                        switchCard("数据漫游", "roaming",
+                                   CpeNode.netSet + "RoamingEnable", "roaming", .blue)
+                        switchCard("VoLTE", "volte",
+                                   CpeNode.netSet + "volte_switch", "volte", .green)
+                        switchCard("载波聚合", "ca",
+                                   "X_FH_MobileNetwork.NetworkInfo.CaEnable", "ca", .purple)
                     }
+
+                    rebootButton
                 }
+                .padding(.horizontal, 14)
+                .padding(.top, 8)
+                .padding(.bottom, 28)
             }
-            .glassListStyle()
+            .scrollContentBackground(.hidden)
+            .background(GlassListBackground())
             .navigationTitle("控制")
-            }
             .alert("确认操作", isPresented: Binding(
                 get: { pendingToggle != nil },
                 set: { if !$0 { pendingToggle = nil } }
             )) {
                 Button("取消", role: .cancel) { pendingToggle = nil }
                 Button("确定") {
-                    guard let p = pendingToggle else { return }
-                    pendingToggle = nil
-                    busyNode = p.node
-                    localOverride[p.node] = p.on          // 立即反映
-                    Task {
-                        let ok = await store.setToggle(node: p.node, on: p.on)
-                        busyNode = nil
-                        if !ok {
-                            localOverride.removeValue(forKey: p.node)   // 失败回滚
-                            store.toast("设置失败，请重试")
-                        } else if let e = store.errorText, !e.isEmpty {
-                            store.toast(e)
-                        } else {
-                            try? await Task.sleep(nanoseconds: 1_200_000_000)
-                            localOverride.removeValue(forKey: p.node)   // 以服务器为准
-                        }
-                    }
+                    Haptic.medium()
+                    applyToggle()
                 }
             } message: {
                 if let p = pendingToggle {
@@ -427,7 +416,11 @@ struct ControlView: View {
             .alert("重启设备", isPresented: $showReboot) {
                 Button("取消", role: .cancel) { }
                 Button("重启", role: .destructive) {
-                    Task { _ = await store.reboot() }
+                    Haptic.warning()
+                    Task {
+                        let ok = await store.reboot()
+                        store.toast(ok ? "重启指令已发送" : "重启失败", kind: ok ? .success : .error)
+                    }
                 }
             } message: {
                 Text("重启期间所有设备将断开网络，约需 1 分钟恢复。")
@@ -435,21 +428,103 @@ struct ControlView: View {
         }
     }
 
-    private func toggleRow(_ title: String, _ sub: String,
-                           _ node: String, _ key: String) -> some View {
-        // 设备不同字段可能返回 "1"/"0" 或 "true"/"false"
-        let raw = store.status[key].lowercased()
-        let serverOn = (raw == "1" || raw == "true" || raw == "on")
-        let isOn = localOverride[node] ?? serverOn
-        return Toggle(isOn: Binding(
-            get: { isOn },
-            set: { newValue in
-                pendingToggle = (node, newValue, title)
+    // MARK: 组件
+
+    private var statusBanner: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(s.isOnline ? Color.green : Color.red)
+                .frame(width: 8, height: 8)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(s.isOnline ? "网络正常" : "网络异常")
+                    .font(.system(size: 14, weight: .semibold))
+                Text(s.carrierName + " · N" + (s["band"].isEmpty ? "--" : s["band"]))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
             }
-        )) {
-            VStack(alignment: .leading, spacing: 2) {
+            Spacer()
+            Text("\(Int(s.double("rsrp"))) dBm")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+        .padding(14)
+        .glassCard(radius: 16)
+    }
+
+    private func switchCard(_ title: String, _ key: String, _ node: String,
+                            _ icon: String, _ tint: Color) -> some View {
+        let raw = (localOverride[node] ?? (s[key].lowercased() == "1"
+                 || s[key].lowercased() == "true")).description
+        let isOn = raw == "true"
+        let busy = busyNode == node
+
+        return Button {
+            pendingToggle = (node, !isOn, title)
+        } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Image(systemName: icon)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(isOn ? tint : Color(white: 0.6))
+                    Spacer()
+                    if busy {
+                        ProgressView().scaleEffect(0.7)
+                    } else {
+                        Text(isOn ? "开" : "关")
+                            .font(.system(size: 10.5, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 8).padding(.vertical, 3)
+                            .background(Capsule().fill(isOn ? tint : Color(white: 0.72)))
+                    }
+                }
                 Text(title)
-                Text(sub).font(.system(size: 11.5)).foregroundStyle(.secondary)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color(white: 0.15))
+                Text(isOn ? "已开启" : "已关闭")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(isOn ? tint : Color(white: 0.62))
+            }
+            .padding(13)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 104)
+            .glassCard(radius: 18)
+        }
+        .buttonStyle(.plain)
+        .haptic(.medium)
+    }
+
+    private var rebootButton: some View {
+        Button { showReboot = true } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "power")
+                    .font(.system(size: 15, weight: .medium))
+                Text("重启设备")
+                    .font(.system(size: 15, weight: .semibold))
+            }
+            .foregroundStyle(Color(red: 0.9, green: 0.3, blue: 0.3))
+            .frame(maxWidth: .infinity)
+            .frame(height: 52)
+            .glassCard(radius: 16)
+        }
+        .buttonStyle(.plain)
+        .haptic(.warning)
+    }
+
+    private func applyToggle() {
+        guard let p = pendingToggle else { return }
+        pendingToggle = nil
+        busyNode = p.node
+        localOverride[p.node] = p.on
+        Task {
+            let ok = await store.setToggle(node: p.node, on: p.on)
+            busyNode = nil
+            if !ok {
+                localOverride.removeValue(forKey: p.node)
+                store.toast("设置失败，请重试", kind: .error)
+            } else {
+                store.toast(p.label + (p.on ? " 已开启" : " 已关闭"), kind: .success)
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                localOverride.removeValue(forKey: p.node)
             }
         }
     }
@@ -465,42 +540,46 @@ struct ParamView: View {
 
     var body: some View {
         NavigationStack {
-            WideAdapter {
-            List {
-                Section("CPE 信息") {
-                    row("型号", s["model"])
-                    row("序列号", masked ? "••••••••" : s["sn"])
-                    row("厂商", s["vendor"])
-                    row("工作模式", s["workmode"])
-                    row("软件版本", s["swver"])
-                    row("硬件版本", s["hwver"])
-                    row("模组版本", s["modem"])
-                    if let t = s.temperature {
-                        row("模组温度", String(format: "%.1f ℃", t))
-                    }
-                }
+            ScrollView {
+                VStack(spacing: 12) {
+                    // 概览卡：型号 + 温度
+                    overviewCard
 
-                Section("网络") {
-                    row("WAN IP", s["wanIP"])
-                    row("LAN IP", s["lanIP"])
-                    row("2.4G SSID", s["ssid24"])
-                    row("5G SSID", s["ssid5g"])
-                    row("在线设备", s["online"])
-                    row("连接状态", s["wanStatus"] == "Connected" ? "已连接" : s["wanStatus"])
-                }
+                    // 3 组两列信息
+                    infoCard("CPE 信息", icon: "cpu", rows: [
+                        ("序列号", masked ? "••••••••" : s["sn"]),
+                        ("厂商", s["vendor"]),
+                        ("软件版本", s["swver"]),
+                        ("硬件版本", s["hwver"]),
+                        ("工作模式", s["workmode"]),
+                        ("模组版本", s["modem"])
+                    ])
 
-                Section("SIM 卡") {
-                    row("运营商", s.carrierName)
-                    row("本机号码", masked ? "••••••••" : s["phone"])
-                    row("IMSI", masked ? "••••••••" : s["imsi"])
-                    row("ICCID", masked ? "••••••••" : s["iccid"])
-                    row("IMEI", masked ? "••••••••" : s["imei"])
-                    row("注册状态", s["regstatus"] == "0" ? "已注册" : "未注册")
+                    infoCard("网络", icon: "wifi", rows: [
+                        ("WAN IP", s["wanIP"]),
+                        ("LAN IP", s["lanIP"]),
+                        ("2.4G SSID", s["ssid24"]),
+                        ("5G SSID", s["ssid5g"]),
+                        ("在线设备", s["online"] + " 台"),
+                        ("连接状态", s["wanStatus"] == "Connected" ? "已连接" : s["wanStatus"])
+                    ])
+
+                    infoCard("SIM 卡", icon: "simcard", rows: [
+                        ("运营商", s.carrierName),
+                        ("本机号码", masked ? "••••••••" : s["phone"]),
+                        ("IMSI", masked ? "••••••••" : s["imsi"]),
+                        ("ICCID", masked ? "••••••••" : s["iccid"]),
+                        ("IMEI", masked ? "••••••••" : s["imei"]),
+                        ("注册状态", s["regstatus"] == "0" ? "已注册" : "未注册")
+                    ])
                 }
+                .padding(.horizontal, 14)
+                .padding(.top, 8)
+                .padding(.bottom, 28)
             }
-            .glassListStyle()
+            .scrollContentBackground(.hidden)
+            .background(GlassListBackground())
             .navigationTitle("参数")
-            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -513,15 +592,67 @@ struct ParamView: View {
         }
     }
 
-    private func row(_ k: String, _ v: String) -> some View {
-        HStack {
-            Text(k).foregroundStyle(.secondary)
+    private var overviewCard: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("设备型号")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Text(s.deviceModel)
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+            }
             Spacer()
-            Text(v.isEmpty ? "--" : v)
-                .font(.system(size: 14, weight: .medium))
-                .multilineTextAlignment(.trailing)
+            if let t = s.temperature {
+                VStack(alignment: .trailing, spacing: 3) {
+                    Text("模组温度")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 3) {
+                        Image(systemName: "thermometer.medium")
+                            .font(.system(size: 13))
+                        Text(String(format: "%.1f°C", t))
+                            .font(.system(size: 19, weight: .bold))
+                    }
+                    .foregroundStyle(t >= 50 ? .red : (t >= 42 ? .orange : .green))
+                }
+            }
         }
-        .font(.system(size: 14))
+        .padding(16)
+        .glassCard(radius: 20, strong: true)
+    }
+
+    /// 三列网格信息卡（更紧凑，无需长列表滚动）
+    private func infoCard(_ title: String, icon: String,
+                          rows: [(String, String)]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.blue)
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+            }
+
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8),
+                                GridItem(.flexible(), spacing: 8)],
+                      alignment: .leading, spacing: 9) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, r in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(r.0)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                        Text(r.1.isEmpty || r.1 == "-" ? "--" : r.1)
+                            .font(.system(size: 12.5, weight: .medium))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .padding(14)
+        .glassCard(radius: 18)
     }
 }
 
@@ -585,7 +716,10 @@ struct SettingsView: View {
                                 .font(.system(size: 12)).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Button("编辑") { showConn = true }
+                        Button("编辑") {
+                            Haptic.light()
+                            showConn = true
+                        }
                             .font(.system(size: 13, weight: .medium))
                     }
                     .padding(.vertical, 2)
@@ -655,6 +789,7 @@ struct SettingsView: View {
                 // ── 退出 ──
                 Section {
                     Button("退出登录", role: .destructive) {
+                        Haptic.warning()
                         Settings.clearPassword()
                         store.isLoggedIn = false
                         store.stopPolling()
@@ -716,6 +851,7 @@ struct ConnEditor: View {
                 }
                 Section {
                     Button {
+                        Haptic.medium()
                         Task {
                             busy = true
                             _ = await store.login(
