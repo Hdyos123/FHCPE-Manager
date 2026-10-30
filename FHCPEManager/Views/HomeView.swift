@@ -3,7 +3,7 @@ import SwiftUI
 
 // MARK: - 液态玻璃卡片
 
-/// 统一的液态玻璃卡片样式：渐变 + 描边 + 阴影
+/// 统一的液态玻璃卡片样式（性能优先：单层阴影 + 描边）
 struct GlassCard: ViewModifier {
     var radius: CGFloat = 24
     var strong: Bool = false
@@ -19,9 +19,9 @@ struct GlassCard: ViewModifier {
                     .strokeBorder(
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(strong ? 0.85 : 0.6),
-                                Color.white.opacity(0.15),
-                                Color.white.opacity(strong ? 0.55 : 0.35)
+                                Color.white.opacity(strong ? 0.9 : 0.65),
+                                Color.white.opacity(0.18),
+                                Color.white.opacity(strong ? 0.5 : 0.32)
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -29,8 +29,7 @@ struct GlassCard: ViewModifier {
                         lineWidth: strong ? 1.2 : 0.9
                     )
             )
-            .shadow(color: Color.black.opacity(0.06), radius: 12, x: 0, y: 4)
-            .shadow(color: Color.white.opacity(0.5), radius: 1, x: 0, y: -1)
+            .shadow(color: Color.black.opacity(0.05), radius: 6, x: 0, y: 2)
     }
 }
 
@@ -48,6 +47,9 @@ struct HomeView: View {
     @State private var showLock = false
     @State private var showParam = false
     @State private var showSms = false
+    @State private var showContract = false
+    @AppStorage("customDown") private var customDown: String = ""
+    @AppStorage("customUp") private var customUp: String = ""
 
     private var s: CpeStatus { store.status }
 
@@ -96,6 +98,12 @@ struct HomeView: View {
             }
             .sheet(isPresented: $showSms) {
                 SmsView().environmentObject(store)
+            }
+            .sheet(isPresented: $showContract) {
+                ContractSheet(down: $customDown, up: $customUp,
+                              deviceDown: mbpsFromKbps(s["dlmax"]),
+                              deviceUp: mbpsFromKbps(s["ulmax"]))
+                    .presentationDetents([.height(340)])
             }
         }
     }
@@ -180,48 +188,53 @@ struct HomeView: View {
                     .foregroundStyle(.secondary)
             }
 
-            HStack(alignment: .center, spacing: 10) {
-                // CPU / 内存
-                VStack(spacing: 16) {
+            HStack(alignment: .center, spacing: 8) {
+                // 左：CPU / 内存（等宽居中，修正偏右）
+                VStack(alignment: .leading, spacing: 18) {
                     miniStat("CPU 负荷", "\(s.int("cpu"))%", Double(s.int("cpu")) / 100)
                     miniStat("内存占用", "\(memPercent)%", Double(memPercent) / 100)
                 }
-                .frame(maxWidth: .infinity)
+                .frame(width: 92, alignment: .leading)
 
-                // 信号环
+                Spacer(minLength: 0)
+
+                // 中：信号环
                 signalGauge
-                    .frame(width: 150, height: 150)
+                    .frame(width: 148, height: 148)
 
-                // 右侧功能键 + 设备
-                VStack(spacing: 7) {
-                    HStack(spacing: 7) {
+                Spacer(minLength: 0)
+
+                // 右：2×2 功能键 + 设备卡
+                VStack(spacing: 8) {
+                    HStack(spacing: 8) {
                         iconBtn("arrow.clockwise") {
                             Task { await store.fetchAll() }
                         }
                         iconBtn("slider.horizontal.3") { showControl = true }
                     }
-                    HStack(spacing: 7) {
+                    HStack(spacing: 8) {
                         iconBtn("lock.fill") { showLock = true }
                         iconBtn("doc.text") { showParam = true }
                     }
                     Button {
                         showDevices = true
                     } label: {
-                        VStack(spacing: 2) {
+                        VStack(spacing: 1) {
                             Image(systemName: "desktopcomputer")
-                                .font(.system(size: 14))
+                                .font(.system(size: 13))
                                 .foregroundStyle(.blue)
                             Text("\(store.hosts.count)")
-                                .font(.system(size: 21, weight: .bold))
+                                .font(.system(size: 20, weight: .bold))
                             Text("在线设备")
-                                .font(.system(size: 10))
+                                .font(.system(size: 9.5))
                                 .foregroundStyle(.secondary)
                         }
-                        .frame(width: 76, height: 64)
-                        .glassCard(radius: 16)
+                        .frame(width: 72, height: 62)
+                        .glassCard(radius: 15)
                     }
                     .buttonStyle(.plain)
                 }
+                .frame(width: 72)
             }
 
             HStack {
@@ -242,19 +255,22 @@ struct HomeView: View {
     }
 
     private func miniStat(_ label: String, _ value: String, _ p: Double) -> some View {
-        VStack(spacing: 3) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(label).font(.system(size: 10.5)).foregroundStyle(.secondary)
-            Text(value).font(.system(size: 18, weight: .bold))
-            GeometryReader { g in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.secondary.opacity(0.18))
-                    Capsule().fill(LinearGradient(colors: [.blue.opacity(0.6), .blue],
-                                                 startPoint: .leading, endPoint: .trailing))
-                        .frame(width: max(3, g.size.width * min(1, max(0, p))))
+            Text(value).font(.system(size: 19, weight: .bold))
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.secondary.opacity(0.18))
+                    .frame(height: 5)
+                GeometryReader { g in
+                    Capsule()
+                        .fill(LinearGradient(colors: [.blue.opacity(0.55), .blue],
+                                             startPoint: .leading, endPoint: .trailing))
+                        .frame(width: max(4, g.size.width * min(1, max(0, p))), height: 5)
                 }
+                .frame(height: 5)
             }
-            .frame(height: 5)
         }
+        .frame(width: 92, alignment: .leading)
     }
 
     private var signalGauge: some View {
@@ -371,7 +387,8 @@ struct HomeView: View {
                         .background(Capsule().fill(color.opacity(0.14)))
                         .overlay(Capsule().strokeBorder(color.opacity(0.35), lineWidth: 0.8))
                 }
-                .offset(x: -6, y: 6)
+                .padding(.top, 5)
+                .padding(.trailing, 6)
             }
         }
         .glassCard(radius: 18)
@@ -386,8 +403,9 @@ struct HomeView: View {
     private var contractCards: some View {
         HStack(spacing: 9) {
             contractItem("QCI", s["qci"], "teal")
-            contractItem("签约下行", mbpsFromKbps(s["dlmax"]), "blue", unit: true)
-            contractItem("签约上行", mbpsFromKbps(s["ulmax"]), "orange", unit: true)
+            contractItem("签约下行", customDown ?? mbpsFromKbps(s["dlmax"]), "blue", unit: true)
+            contractItem("签约上行", customUp ?? mbpsFromKbps(s["ulmax"]),
+                         "orange", unit: true, editable: true)
         }
     }
 
@@ -398,7 +416,8 @@ struct HomeView: View {
     }
 
     private func contractItem(_ label: String, _ value: String,
-                              _ colorName: String, unit: Bool = false) -> some View {
+                              _ colorName: String, unit: Bool = false,
+                              editable: Bool = false) -> some View {
         let color: Color = colorName == "teal" ? .teal
             : (colorName == "blue" ? .blue : .orange)
         return VStack(spacing: 4) {
@@ -412,6 +431,21 @@ struct HomeView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 13)
+        .overlay(alignment: .topTrailing) {
+            if editable {
+                Button { showContract = true } label: {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(color)
+                        .frame(width: 20, height: 20)
+                        .background(Circle().fill(color.opacity(0.14)))
+                        .overlay(Circle().strokeBorder(color.opacity(0.35), lineWidth: 0.8))
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 5)
+                .padding(.trailing, 6)
+            }
+        }
         .glassCard(radius: 18)
     }
 
