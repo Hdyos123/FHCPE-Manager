@@ -12,7 +12,7 @@ struct GlassCard: ViewModifier {
         content
             .background(
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .fill(.ultraThinMaterial)
+                    .fill(Color(.secondarySystemGroupedBackground).opacity(0.72))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -29,13 +29,48 @@ struct GlassCard: ViewModifier {
                         lineWidth: strong ? 1.2 : 0.9
                     )
             )
-            .shadow(color: Color.black.opacity(0.05), radius: 6, x: 0, y: 2)
     }
 }
 
 extension View {
     func glassCard(radius: CGFloat = 24, strong: Bool = false) -> some View {
         modifier(GlassCard(radius: radius, strong: strong))
+    }
+}
+
+
+// MARK: - 速率分档配色
+
+/// 实测阈值：≥125 爆速 / ≥100 极速 / ≥20 正常 / ≥5 偏慢 / 其余异常
+enum SpeedTier {
+    case ultra, fast, normal, slow, bad
+
+    static func of(_ mbps: Double) -> SpeedTier {
+        if mbps >= 125 { return .ultra }
+        if mbps >= 100 { return .fast }
+        if mbps >= 20  { return .normal }
+        if mbps >= 5   { return .slow }
+        return .bad
+    }
+
+    var color: Color {
+        switch self {
+        case .ultra:  return Color(red: 0.55, green: 0.36, blue: 0.96)  // 紫 #8B5CF6
+        case .fast:   return Color(red: 0.09, green: 0.72, blue: 0.65)  // 青绿 #17B8A6
+        case .normal: return Color(red: 0.24, green: 0.55, blue: 0.99)  // 蓝 #3D8BFD
+        case .slow:   return Color(red: 0.94, green: 0.63, blue: 0.29)  // 橙 #F0A04B
+        case .bad:    return Color(red: 0.90, green: 0.34, blue: 0.30)  // 红 #E5574D
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .ultra:  return "爆速"
+        case .fast:   return "极速"
+        case .normal: return "正常"
+        case .slow:   return "偏慢"
+        case .bad:    return "异常"
+        }
     }
 }
 
@@ -180,7 +215,7 @@ struct HomeView: View {
                     }
                     .foregroundStyle(.green)
                     .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(Capsule().fill(.ultraThinMaterial))
+                    .background(Capsule().fill(Color(.secondarySystemGroupedBackground).opacity(0.85)))
                 }
 
                 Text(s["model"].isEmpty ? "CPE" : s["model"])
@@ -345,10 +380,12 @@ struct HomeView: View {
         }
     }
 
-    private func speedBox(_ label: String, _ bps: Double, _ color: Color,
+    private func speedBox(_ label: String, _ bps: Double, _ baseColor: Color,
                           showRate: Bool = false) -> some View {
         let mbps = bps / 1_000_000
         let mbs = bps / 8 / 1024 / 1024
+        // 分档着色；无数据时用基础色
+        let color = mbps > 0 ? SpeedTier.of(mbps).color : baseColor
         return VStack(spacing: 2) {
             Text(label).font(.system(size: 11)).foregroundStyle(.secondary)
             HStack(alignment: .firstTextBaseline, spacing: 2) {
@@ -357,9 +394,18 @@ struct HomeView: View {
                     .foregroundStyle(color)
                 Text("Mbps").font(.system(size: 9.5)).foregroundStyle(.secondary)
             }
-            Text(String(format: "%.2f MB/s", mbs))
-                .font(.system(size: 10.5))
-                .foregroundStyle(color.opacity(0.75))
+            HStack(spacing: 3) {
+                Text(String(format: "%.2f MB/s", mbs))
+                    .font(.system(size: 10.5))
+                if mbps > 0 {
+                    Text(SpeedTier.of(mbps).label)
+                        .font(.system(size: 9, weight: .semibold))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(color.opacity(0.15)))
+                }
+            }
+            .foregroundStyle(color.opacity(0.8))
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
@@ -387,8 +433,7 @@ struct HomeView: View {
                         .background(Capsule().fill(color.opacity(0.14)))
                         .overlay(Capsule().strokeBorder(color.opacity(0.35), lineWidth: 0.8))
                 }
-                .padding(.top, 5)
-                .padding(.trailing, 6)
+                .offset(x: 7, y: -7)
             }
         }
         .glassCard(radius: 18)
@@ -403,10 +448,16 @@ struct HomeView: View {
     private var contractCards: some View {
         HStack(spacing: 9) {
             contractItem("QCI", s["qci"], "teal")
-            contractItem("签约下行", customDown ?? mbpsFromKbps(s["dlmax"]), "blue", unit: true)
-            contractItem("签约上行", customUp ?? mbpsFromKbps(s["ulmax"]),
+            contractItem("签约下行", pick(customDown, s["dlmax"]), "blue", unit: true)
+            contractItem("签约上行", pick(customUp, s["ulmax"]),
                          "orange", unit: true, editable: true)
         }
+    }
+
+    /// 自定义值优先，空白则用设备值
+    private func pick(_ custom: String, _ deviceKbps: String) -> String {
+        let c = custom.trimmingCharacters(in: .whitespaces)
+        return c.isEmpty ? mbpsFromKbps(deviceKbps) : c
     }
 
     private func mbpsFromKbps(_ v: String) -> String {
@@ -442,8 +493,7 @@ struct HomeView: View {
                         .overlay(Circle().strokeBorder(color.opacity(0.35), lineWidth: 0.8))
                 }
                 .buttonStyle(.plain)
-                .padding(.top, 5)
-                .padding(.trailing, 6)
+                .offset(x: 7, y: -7)
             }
         }
         .glassCard(radius: 18)
