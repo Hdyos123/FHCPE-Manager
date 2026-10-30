@@ -166,7 +166,7 @@ struct ControlView: View {
                 Button("取消", role: .cancel) { pendingToggle = nil }
                 Button("确定") {
                     if let p = pendingToggle {
-                        Task { _ = await store.setToggle(p.node, on: p.on) }
+                        Task { _ = await store.setToggle(node: p.node, on: p.on) }
                     }
                     pendingToggle = nil
                 }
@@ -421,30 +421,6 @@ struct ConnEditor: View {
     }
 }
 
-// MARK: - 锁频 / 短信（占位，后续完善）
 
-struct LockBandView: View {
-    var body: some View {
-        NavigationStack {
-            List {
-                Section("频段锁定") {
-                    Text("当前 N78 · 100MHz").foregroundStyle(.secondary)
-                }
-            }
-            .navigationTitle("锁频")
-        }
-    }
-}
 
-struct SmsView: View {
-    var body: some View {
-        NavigationStack {
-            List {
-                Section("收件箱") {
-                    Text("暂无短信").foregroundStyle(.secondary)
-                }
-            }
-            .navigationTitle("短信")
-        }
-    }
-}
+
