@@ -69,6 +69,7 @@ enum CpeNode {
             "airplane": netSet + "airplan_on",
             "roaming": netSet + "RoamingEnable",
             "volte": netSet + "volte_switch",
+            "ca": "X_FH_MobileNetwork.NetworkInfo.CaEnable",
             "lockbandEn": netSet + "LockBandEnable",
             "lockbandNr": netSet + "NRLockBAND",
             "lockbandLte": netSet + "LTELockBAND",
