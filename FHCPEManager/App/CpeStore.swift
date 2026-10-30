@@ -32,12 +32,47 @@ final class CpeStore: ObservableObject {
 
     func login(host: String, user: String, password: String) async -> Bool {
         errorText = nil
+        diagLog = ""
         isLoading = true
         defer { isLoading = false }
 
-        // ① 优先 WebView 桥接；登录后必须能真正取到数据才算成功
-        let bridgeOK = await bridge.login(host: host, user: user, password: password)
-        if bridgeOK {
+        // 前置校验
+        guard !host.trimmingCharacters(in: .whitespaces).isEmpty else {
+            errorText = "请填写设备地址"; return false
+        }
+        guard !user.trimmingCharacters(in: .whitespaces).isEmpty else {
+            errorText = "请填写账号"; return false
+        }
+        guard !password.isEmpty else {
+            errorText = "请输入密码"; return false
+        }
+
+        // ① 先用原生 API（最直接可控，能准确拿到错误码）
+        CpeNativeAPI.shared.configure(host: host, user: user, pass: password)
+        do {
+            try await CpeNativeAPI.shared.login()
+            let probe = try await CpeNativeAPI.shared.values(CpeNode.overview)
+            if !probe.isEmpty {
+                useNative = true
+                Settings(host: host, user: user, password: password).save()
+                isLoggedIn = true
+                await fetchAll()
+                return true
+            }
+            diagLog = "原生登录成功但取不到数据"
+        } catch {
+            let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            // 凭据错误直接返回，不再尝试其它路径
+            if msg.contains("密码") || msg.contains("账号") {
+                errorText = msg
+                return false
+            }
+            diagLog = "原生: " + msg
+        }
+
+        // ② 原生失败再试 WebView
+        let ok = await bridge.login(host: host, user: user, password: password)
+        if ok {
             let probe = await bridge.fetchValues(CpeNode.overview)
             if !probe.isEmpty {
                 useNative = false
@@ -46,57 +81,37 @@ final class CpeStore: ObservableObject {
                 await fetchAll()
                 return true
             }
-            diagLog = "WebView 登录成功但取不到数据"
+            diagLog += " | WebView 登录成功但取不到数据"
         } else {
-            diagLog = "WebView: " + (bridge.lastError ?? "未知")
+            diagLog += " | WebView: " + (bridge.lastError ?? "未知")
         }
 
-        // ② 兜底：纯原生 URLSession + CommonCrypto
-        CpeNativeAPI.shared.configure(host: host, user: user, pass: password)
-        do {
-            try await CpeNativeAPI.shared.login()
-            let probe = try await CpeNativeAPI.shared.values(CpeNode.overview)
-            if probe.isEmpty {
-                errorText = "登录成功但设备未返回数据\n" + diagLog
-                return false
-            }
-            useNative = true
-            Settings(host: host, user: user, password: password).save()
-            isLoggedIn = true
-            await fetchAll()
-            return true
-        } catch {
-            let nativeMsg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            errorText = "WebView: \(bridge.lastError ?? "-")\n原生: \(nativeMsg)"
-            return false
-        }
+        errorText = diagLog.isEmpty ? "连接失败" : diagLog
+        return false
     }
 
     func tryAutoLogin() async {
-        let s = Settings.load()
-        guard s.isConfigured else { return }
-        let ok = await bridge.login(host: s.host, user: s.user, password: s.password)
+        let cfg = Settings.load()
+        guard cfg.isConfigured else { return }
+
+        CpeNativeAPI.shared.configure(host: cfg.host, user: cfg.user, pass: cfg.password)
+        if (try? await CpeNativeAPI.shared.login()) != nil,
+           let probe = try? await CpeNativeAPI.shared.values(CpeNode.overview),
+           !probe.isEmpty {
+            useNative = true
+            isLoggedIn = true
+            await fetchAll()
+            return
+        }
+
+        let ok = await bridge.login(host: cfg.host, user: cfg.user, password: cfg.password)
         if ok {
             let probe = await bridge.fetchValues(CpeNode.overview)
             if !probe.isEmpty {
                 useNative = false
                 isLoggedIn = true
                 await fetchAll()
-                return
             }
-        }
-        CpeNativeAPI.shared.configure(host: s.host, user: s.user, pass: s.password)
-        if let probe = try? await CpeNativeAPI.shared.values(CpeNode.overview),
-           (try? await CpeNativeAPI.shared.login()) != nil, !probe.isEmpty {
-            useNative = true
-            isLoggedIn = true
-            await fetchAll()
-        } else if (try? await CpeNativeAPI.shared.login()) != nil {
-            useNative = true
-            isLoggedIn = true
-            await fetchAll()
-        } else {
-            errorText = bridge.lastError
         }
     }
 
