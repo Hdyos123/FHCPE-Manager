@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - 登录
 
@@ -350,28 +351,47 @@ struct ModelSheet: View {
 struct SettingsView: View {
     @EnvironmentObject var store: CpeStore
     @State private var showConn = false
+    @AppStorage("appTheme") private var theme = "system"
 
     var body: some View {
         NavigationStack {
             List {
+                // ── 连接状态 ──
                 Section {
-                    HStack {
+                    HStack(spacing: 11) {
                         Circle()
-                            .fill(store.isLoggedIn ? .green : .red)
+                            .fill(store.isLoggedIn ? Color.green : Color.red)
                             .frame(width: 9, height: 9)
-                        VStack(alignment: .leading, spacing: 1) {
+                        VStack(alignment: .leading, spacing: 2) {
                             Text(store.isLoggedIn ? "已连接" : "未连接")
-                                .font(.system(size: 14, weight: .semibold))
-                            Text(Settings.load().host)
-                                .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                                .font(.system(size: 15, weight: .semibold))
+                            Text(Settings.load().host + " · " + Settings.load().user)
+                                .font(.system(size: 12)).foregroundStyle(.secondary)
                         }
                         Spacer()
                         Button("编辑") { showConn = true }
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.system(size: 13, weight: .medium))
                     }
+                    .padding(.vertical, 2)
                 }
 
-                Section("刷新频率") {
+                // ── 外观 ──
+                Section {
+                    Picker("主题", selection: $theme) {
+                        Text("跟随系统").tag("system")
+                        Text("浅色").tag("light")
+                        Text("深色").tag("dark")
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: theme) { newValue in
+                        applyAppearance(newValue)
+                    }
+                } header: {
+                    Text("外观")
+                }
+
+                // ── 刷新频率 ──
+                Section {
                     Picker("刷新间隔", selection: Binding(
                         get: { store.refreshInterval },
                         set: { store.refreshInterval = $0; store.startPolling() }
@@ -384,16 +404,39 @@ struct SettingsView: View {
                         Text("5s").tag(5.0)
                     }
                     .pickerStyle(.segmented)
+                } header: {
+                    Text("数据刷新")
                 }
 
-                Section("诊断") {
+                // ── 连接诊断 ──
+                Section {
                     NavigationLink {
                         DiagView()
+                            .environmentObject(store)
                     } label: {
                         Label("连接诊断", systemImage: "stethoscope")
                     }
                 }
 
+                // ── 关于 ──
+                Section {
+                    HStack {
+                        Text("版本")
+                        Spacer()
+                        Text(appVersion)
+                            .foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Text("设备")
+                        Spacer()
+                        Text(store.status["model"].isEmpty ? "--" : store.status["model"])
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("关于")
+                }
+
+                // ── 退出 ──
                 Section {
                     Button("退出登录", role: .destructive) {
                         Settings.clearPassword()
@@ -405,8 +448,29 @@ struct SettingsView: View {
             .navigationTitle("设置")
             .sheet(isPresented: $showConn) {
                 ConnEditor()
-                    .presentationDetents([.medium])
+                    .environmentObject(store)
             }
+            .onAppear { applyAppearance(theme) }
+        }
+    }
+
+    private var appVersion: String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+        return "v\(v) (\(b))"
+    }
+
+    private func applyAppearance(_ mode: String) {
+        let scenes = UIApplication.shared.connectedScenes
+        let style: UIUserInterfaceStyle
+        switch mode {
+        case "light": style = .light
+        case "dark":  style = .dark
+        default:      style = .unspecified
+        }
+        for s in scenes {
+            guard let w = s as? UIWindowScene else { continue }
+            for win in w.windows { win.overrideUserInterfaceStyle = style }
         }
     }
 }
