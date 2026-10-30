@@ -17,7 +17,7 @@ struct DeviceSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                ForEach(hosts) { h in
+                ForEach(hosts, id: \.id) { h in
                     HStack(spacing: 11) {
                         Image(systemName: h.isWired ? "desktopcomputer" : "iphone")
                             .font(.system(size: 16))
