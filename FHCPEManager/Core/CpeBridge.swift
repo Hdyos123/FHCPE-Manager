@@ -206,19 +206,16 @@ final class CpeBridge: NSObject, ObservableObject {
         let r = await jsCall(body)
         let s = (r as? String) ?? ""
 
-        if s.hasPrefix("0|") {
+        switch LoginCode.parse(s) {
+        case .ok:
             ready = true
             lastError = nil
             return true
-        }
-        if s.hasPrefix("4") {
-            lastError = "用户名或密码错误"
-        } else if s.hasPrefix("2") || s.hasPrefix("3") {
-            lastError = "登录被锁定，请等 1 分钟再试"
-        } else if s.isEmpty {
-            lastError = "登录无响应，请检查网络连接"
-        } else {
-            lastError = "登录失败（返回：\(s.prefix(30))）"
+        case .badCredentials, .busy, .sessionExpired:
+            lastError = LoginCode.parse(s).message
+        case .unknown:
+            lastError = s.isEmpty ? "登录无响应，请检查网络连接"
+                                   : LoginCode.parse(s).message
         }
         return false
     }
@@ -273,22 +270,22 @@ final class CpeBridge: NSObject, ObservableObject {
         let r = await jsCall(js)
         let str = (r as? String) ?? ""
 
-        if str.hasPrefix("0|") {
+        switch LoginCode.parse(str) {
+        case .ok:
             ready = true
             lastError = nil
             diagInfo = "fallback login OK"
             return true
-        }
-        if str.hasPrefix("4") {
-            lastError = "用户名或密码错误"
-        } else if str.hasPrefix("2") || str.hasPrefix("3") {
-            lastError = "登录被锁定，请等 1 分钟"
-        } else if str.isEmpty {
-            lastError = "无法获取会话，请确认连着 CPE 的 Wi-Fi"
-        } else if str.contains("no_sessionid") {
-            lastError = "无法获取会话（设备未响应）"
-        } else {
-            lastError = "登录失败（" + String(str.prefix(40)) + "）"
+        case .badCredentials, .busy, .sessionExpired:
+            lastError = LoginCode.parse(str).message
+        case .unknown:
+            if str.isEmpty {
+                lastError = "无法获取会话，请确认连着 CPE 的 Wi-Fi"
+            } else if str.contains("no_sessionid") {
+                lastError = "无法获取会话（设备未响应）"
+            } else {
+                lastError = LoginCode.parse(str).message
+            }
         }
         return false
     }
