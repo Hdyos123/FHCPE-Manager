@@ -173,13 +173,15 @@ struct LockBandView: View {
             defer { busy = false }
             do {
                 if pendingAction == "band" {
-                    _ = await store.applyBandLock(
+                    let ok = await store.applyBandLock(
                         enable: lockEnabled,
                         nr: Array(selectedNR).sorted(),
                         lte: Array(selectedLTE).sorted())
+                    store.toast(ok ? "频段锁定已应用" : "应用失败，请检查连接")
                 } else {
-                    _ = await store.applyCarrierLock(
+                    let ok = await store.applyCarrierLock(
                         enable: carrierEnabled, serial: carrierSerial)
+                    store.toast(ok ? "运营商锁定已应用" : "应用失败，请检查连接")
                 }
             } catch {
                 store.errorText = (error as? LocalizedError)?.errorDescription
