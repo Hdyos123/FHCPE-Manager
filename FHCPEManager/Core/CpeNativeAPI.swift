@@ -140,11 +140,13 @@ final class CpeNativeAPI {
 
         // 3. POST 登录
         let r = try await request("/api/sign/DO_WEB_LOGIN?_\(rnd())", body: payload)
-        let trimmed = r.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix("0|") { return }
-        if trimmed.hasPrefix("4") { throw NError.badCredentials }
-        if trimmed.hasPrefix("2") || trimmed.hasPrefix("3") { throw NError.locked }
-        throw NError.loginFailed(trimmed)
+        switch LoginCode.parse(r) {
+        case .ok:               return
+        case .badCredentials:   throw NError.badCredentials
+        case .busy:             throw NError.busy
+        case .sessionExpired:   throw NError.sessionExpired
+        case .unknown(let s):   throw NError.loginFailed(s)
+        }
     }
 
     // MARK: - 数据
@@ -246,6 +248,7 @@ enum NError: LocalizedError {
     case badCredentials
     case http(Int)
     case loginFailed(String)
+    case busy, sessionExpired
 
     var errorDescription: String? {
         switch self {
@@ -256,7 +259,9 @@ enum NError: LocalizedError {
         case .locked:          return "登录被锁定，请等 1 分钟"
         case .badCredentials:  return "用户名或密码错误"
         case .http(let c):     return "HTTP \(c)"
-        case .loginFailed(let s): return "登录失败（\(s.prefix(30))）"
+        case .loginFailed(let s): return "登录失败（" + String(s.prefix(30)) + "）"
+        case .busy:            return "设备繁忙，请稍后重试"
+        case .sessionExpired:  return "会话已过期，请重试"
         }
     }
 }
