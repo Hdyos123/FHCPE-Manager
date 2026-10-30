@@ -69,6 +69,7 @@ struct HomeView: View {
                 ContractSheet(down: $customDown, up: $customUp,
                               deviceDown: mbpsFromKbps(s["dlmax"]),
                               deviceUp: mbpsFromKbps(s["ulmax"]))
+                    .environmentObject(store)
                     .presentationDetents([.height(340)])
             }
         }
@@ -199,6 +200,7 @@ struct HomeView: View {
                         .glassCard(radius: 15)
                     }
                     .buttonStyle(.plain)
+                    .haptic()
                 }
                 .frame(width: 84)
             }
@@ -298,6 +300,7 @@ struct HomeView: View {
                 .glassCard(radius: 12)
         }
         .buttonStyle(.plain)
+        .haptic()
     }
 
     /// 连续运行时间：精确到分钟。3 天 5 小时 12 分钟
@@ -351,7 +354,7 @@ struct HomeView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 78)          // 与左右速率卡同高，避免视觉缩水
+            .frame(height: 92)          // 与速率卡完全等高等宽
             .glassCard(radius: 18)
         }
     }
@@ -360,35 +363,30 @@ struct HomeView: View {
                           showRate: Bool = false) -> some View {
         let mbps = bps / 1_000_000
         let mbs = bps / 8 / 1024 / 1024
-        // 分档着色；无数据时用基础色
         let color = mbps > 0 ? SpeedTier.of(mbps).color : baseColor
-        return VStack(spacing: 1) {
-            // 标签
+
+        return VStack(spacing: 0) {
             Text(label)
                 .font(.system(size: 11))
                 .foregroundStyle(Color(white: 0.52))
-                .padding(.bottom, 2)
+                .frame(height: 15)
 
-            // 主数值 + 单位（基线对齐，单位与数值同色系）
             HStack(alignment: .firstTextBaseline, spacing: 1) {
                 Text(String(format: "%.2f", mbps))
                     .font(.system(size: 21, weight: .bold, design: .rounded))
                     .foregroundStyle(color)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.75)
+                    .minimumScaleFactor(0.7)
                 Text("Mbps")
                     .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(color.opacity(0.55))
             }
-            .fixedSize(horizontal: false, vertical: true)
+            .frame(height: 26)
 
-            // 副数值
             Text(String(format: "%.2f MB/s", mbs))
-                .font(.system(size: 10, weight: .regular))
+                .font(.system(size: 10))
                 .foregroundStyle(Color(white: 0.55))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .padding(.top, 1)
+                .frame(height: 14)
 
             if mbps > 0 {
                 let tier = SpeedTier.of(mbps)
@@ -400,11 +398,13 @@ struct HomeView: View {
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(Capsule().fill(tier.color.opacity(0.12)))
-                    .padding(.top, 3)
+                    .frame(height: 18)
+            } else {
+                Color.clear.frame(height: 18)
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
+        .frame(height: 92)                          // 固定高度，绝不因内容变化
         .overlay(alignment: .topTrailing) {
             if showRate {
                 Menu {
@@ -424,14 +424,13 @@ struct HomeView: View {
                     Text(rateLabel(store.refreshInterval))
                         .font(.system(size: 9.5, weight: .bold))
                         .foregroundStyle(color)
+                        .frame(height: 18)
                         .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(Capsule().fill(Color.white.opacity(0.92)))
-                        .overlay(Capsule().strokeBorder(color.opacity(0.45), lineWidth: 1))
-                        .shadow(color: color.opacity(0.2), radius: 2, x: 0, y: 1)
+                        .background(Capsule().fill(Color.white.opacity(0.95)))
+                        .overlay(Capsule().strokeBorder(color.opacity(0.4), lineWidth: 1))
                 }
-                .padding(.top, 6)
-                .padding(.trailing, 7)
+                .offset(x: 8, y: -8)                // 骑在卡片右上角边框上
+                .haptic()
             }
         }
         .glassCard(radius: 18)
@@ -473,26 +472,30 @@ struct HomeView: View {
                               editable: Bool = false) -> some View {
         let color: Color = colorName == "teal" ? .teal
             : (colorName == "blue" ? .blue : .orange)
-        return VStack(spacing: 1) {
+        return VStack(spacing: 0) {
             Text(label)
                 .font(.system(size: 11))
                 .foregroundStyle(Color(white: 0.52))
-                .padding(.bottom, 2)
+                .frame(height: 15)
+
             HStack(alignment: .firstTextBaseline, spacing: 1) {
                 Text(value.isEmpty ? "--" : value)
                     .font(.system(size: 21, weight: .bold, design: .rounded))
                     .foregroundStyle(color)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.75)
+                    .minimumScaleFactor(0.7)
                 if unit {
                     Text("Mbps")
                         .font(.system(size: 9, weight: .medium))
                         .foregroundStyle(color.opacity(0.55))
                 }
             }
+            .frame(height: 26)
+
+            Color.clear.frame(height: 18)
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 78)          // 与速率卡等高
+        .frame(height: 92)                          // 与速率卡等高
         .overlay(alignment: .topTrailing) {
             if editable {
                 Button { showContract = true } label: {
@@ -500,19 +503,16 @@ struct HomeView: View {
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(color)
                         .frame(width: 20, height: 20)
-                        .background(Circle().fill(Color.white.opacity(0.92)))
-                        .overlay(Circle().strokeBorder(color.opacity(0.45), lineWidth: 1))
-                        .shadow(color: color.opacity(0.2), radius: 2, x: 0, y: 1)
+                        .background(Circle().fill(Color.white.opacity(0.95)))
+                        .overlay(Circle().strokeBorder(color.opacity(0.4), lineWidth: 1))
                 }
                 .buttonStyle(.plain)
-                .padding(.top, 6)
-                .padding(.trailing, 7)
+                .haptic(.medium)
+                .offset(x: 8, y: -8)                // 骑在卡片右上角边框上
             }
         }
         .glassCard(radius: 18)
     }
-
-    // MARK: - PCC
 
     private var pccCard: some View {
         VStack(spacing: 12) {
