@@ -2,6 +2,11 @@ name: Build Unsigned IPA
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（如 1.1.2）"
+        required: false
+        default: "1.1.2"
   push:
     branches: [ main ]
 
@@ -27,12 +32,14 @@ jobs:
 
       - name: Set version from tag
         run: |
-          # 从 tag 或 MANUAL_VERSION 读取版本号，默认 1.0.9
-          VER="${{ github.ref_name }}"
-          if [[ "$VER" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-            VER="${BASH_REMATCH[1]}"
-          else
-            VER="1.0.9"
+          # 优先用手动输入的版本号；否则用 tag；最后回退
+          VER="${{ inputs.version }}"
+          echo "inputs.version = $VER"
+          if [ -z "$VER" ]; then
+            VER="${GITHUB_REF_NAME#v}"
+          fi
+          if ! [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            VER="1.1.2"
           fi
           BUILD=$(date +%m%d%H)
           echo "version=$VER build=$BUILD"
