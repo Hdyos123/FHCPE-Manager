@@ -16,6 +16,7 @@ enum CpeNode {
     static var overview: [String: String] {
         [
             "model": "DeviceInfo.ModelName",
+            "modelDesc": "DeviceInfo.Description",
             "sn": "DeviceInfo.SerialNumber",
             "swver": "DeviceInfo.SoftwareVersion",
             "hwver": "DeviceInfo.HardwareVersion",
@@ -95,6 +96,17 @@ struct CpeStatus {
     func double(_ k: String) -> Double {
         guard let s = raw[k], !s.isEmpty else { return 0 }
         return Double(s) ?? 0
+    }
+
+    /// 设备型号：优先 ModelName，为空时退回 Description / 硬件版本
+    var deviceModel: String {
+        let m = self["model"].trimmingCharacters(in: .whitespaces)
+        if !m.isEmpty, m != "-" { return m }
+        let d = self["modelDesc"].trimmingCharacters(in: .whitespaces)
+        if !d.isEmpty, d != "-" { return d }
+        let h = self["hwver"].trimmingCharacters(in: .whitespaces)
+        if !h.isEmpty { return String(h.prefix(12)) }
+        return "CPE"
     }
 
     var carrierName: String {
