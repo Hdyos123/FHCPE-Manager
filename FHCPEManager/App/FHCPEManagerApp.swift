@@ -15,6 +15,7 @@ struct FHCPEManagerApp: App {
 
 struct RootView: View {
     @EnvironmentObject var store: CpeStore
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ZStack {
@@ -36,6 +37,18 @@ struct RootView: View {
         }
         .onChange(of: store.isLoggedIn) { ok in
             if ok { store.startPolling() } else { store.stopPolling() }
+        }
+        .onChange(of: scenePhase) { phase in
+            switch phase {
+            case .active:
+                // 回到前台：恢复轮询并立即刷新
+                Task { await store.resumeFromBackground() }
+            case .background:
+                // 进入后台：停止轮询节省资源
+                store.stopPolling()
+            default:
+                break
+            }
         }
     }
 }
