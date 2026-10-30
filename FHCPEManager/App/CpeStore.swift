@@ -13,12 +13,21 @@ final class CpeStore: ObservableObject {
     @Published var toastText: String?
     private var toastTask: Task<Void, Never>?
 
-    /// 短暂提示
-    func toast(_ msg: String) {
+    @Published var toastKind: ToastKind = .success
+
+    /// 顶部短暂提示
+    func toast(_ msg: String, kind: ToastKind = .success) {
+        // 同时给出触感
+        switch kind {
+        case .success: Haptic.success()
+        case .info:    Haptic.light()
+        case .error:   Haptic.error()
+        }
         toastTask?.cancel()
+        toastKind = kind
         toastText = msg
         toastTask = Task {
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            try? await Task.sleep(nanoseconds: 2_200_000_000)
             if !Task.isCancelled { self.toastText = nil }
         }
     }
