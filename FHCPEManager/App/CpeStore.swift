@@ -62,8 +62,9 @@ final class CpeStore: ObservableObject {
             diagLog = "原生登录成功但取不到数据"
         } catch {
             let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            // 凭据错误直接返回，不再尝试其它路径
-            if msg.contains("密码") || msg.contains("账号") {
+            // 凭据错误 / 锁定：直接返回，不再尝试其它路径
+            // （避免继续累计失败次数）
+            if msg.contains("密码") || msg.contains("账号") || msg.contains("锁定") {
                 errorText = msg
                 return false
             }
