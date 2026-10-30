@@ -20,6 +20,7 @@ final class CpeStore: ObservableObject {
 
     private let bridge = CpeBridge.shared
     private var pollTask: Task<Void, Never>?
+    private var useNative = false
 
     init() {
         let saved = UserDefaults.standard.double(forKey: "cpe.rateMs")
@@ -33,14 +34,29 @@ final class CpeStore: ObservableObject {
         isLoading = true
         defer { isLoading = false }
 
-        let ok = await bridge.login(host: host, user: user, password: password)
-        if ok {
+        // 优先 WebView 桥接
+        let bridgeOK = await bridge.login(host: host, user: user, password: password)
+        if bridgeOK {
+            useNative = false
             Settings(host: host, user: user, password: password).save()
             isLoggedIn = true
             await fetchAll()
             return true
-        } else {
-            errorText = bridge.lastError ?? "登录失败"
+        }
+
+        // 兜底：纯原生 URLSession + CommonCrypto
+        CpeNativeAPI.shared.configure(host: host, user: user, pass: password)
+        do {
+            try await CpeNativeAPI.shared.login()
+            useNative = true
+            Settings(host: host, user: user, password: password).save()
+            isLoggedIn = true
+            await fetchAll()
+            return true
+        } catch {
+            let nativeMsg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            let bridgeMsg = bridge.lastError ?? ""
+            errorText = "WebView: \(bridgeMsg)\n原生: \(nativeMsg)"
             return false
         }
     }
@@ -50,6 +66,14 @@ final class CpeStore: ObservableObject {
         guard s.isConfigured else { return }
         let ok = await bridge.login(host: s.host, user: s.user, password: s.password)
         if ok {
+            useNative = false
+            isLoggedIn = true
+            await fetchAll()
+            return
+        }
+        CpeNativeAPI.shared.configure(host: s.host, user: s.user, pass: s.password)
+        if (try? await CpeNativeAPI.shared.login()) != nil {
+            useNative = true
             isLoggedIn = true
             await fetchAll()
         } else {
@@ -66,14 +90,35 @@ final class CpeStore: ObservableObject {
         lastUpdate = Date()
     }
 
+
+    // MARK: - 统一数据入口（自动分流 WebView / 原生）
+
+    private func mp(_ method: String, _ data: [String: Any]) async -> [[String: Any]] {
+        if useNative {
+            return (try? await CpeNativeAPI.shared.multipost(method: method, data: data)) ?? []
+        }
+        return await bridge.multipost(method: method, data: data)
+    }
+
+    private func set1(_ url: String, _ value: String) async -> Bool {
+        if useNative {
+            do { try await CpeNativeAPI.shared.setSingle(url: url, value: value); return true }
+            catch { return false }
+        }
+        return await bridge.setSingle(url: url, value: value)
+    }
+
     func fetchStatus() async {
-        var v = await bridge.fetchValues(CpeNode.overview)
+        var v: [String: String] = [:]
+        if useNative {
+            v = (try? await CpeNativeAPI.shared.values(CpeNode.overview)) ?? [:]
+        } else {
+            v = await bridge.fetchValues(CpeNode.overview)
+        }
         guard !v.isEmpty else { return }
 
         // uptime 不在 XML 节点里，需单独走 get_cmd_result_web
-        let cmd = await bridge.multipost(method: "get_cmd_result_web", data: [
-            "data_1": ["key": "UPTIME"]
-        ])
+        let cmd = await mp("get_cmd_result_web", ["data_1": ["key": "UPTIME"]])
         if let first = cmd.first, let result = first["result"] as? String {
             v["uptime"] = result
         } else if let first = cmd.first, let num = first["result"] as? NSNumber {
@@ -86,14 +131,15 @@ final class CpeStore: ObservableObject {
     }
 
     func fetchHosts() async {
-        // Wi-Fi 关联设备（真实在线判断依据）
-        let wifiRows = await bridge.multipost(method: "get_xml_childnode_value", data: [
-            "data_1": [
-                "url": "LANDevice.1.WLANConfiguration.",
-                "node": ["AssociatedDevice": [
-                    "url": "AssociatedDevice.",
-                    "node": ["MAC": "AssociatedDeviceMACAddress"]
-                ]]
+        func query(_ table: String, _ node: [String: Any]) async -> [[String: Any]] {
+            await mp("get_xml_childnode_value", ["data_1": ["url": table, "node": node]])
+        }
+
+        // 1. Wi-Fi 关联设备（判断真实在线）
+        let wifiRows = await query("LANDevice.1.WLANConfiguration.", [
+            "AssociatedDevice": [
+                "url": "AssociatedDevice.",
+                "node": ["MAC": "AssociatedDeviceMACAddress"]
             ]
         ])
 
@@ -110,14 +156,11 @@ final class CpeStore: ObservableObject {
             }
         }
 
-        // Hosts 表：名称 / 有线 / 限速
-        let hostRows = await bridge.multipost(method: "get_xml_childnode_value", data: [
-            "data_1": [
-                "url": "LANDevice.1.Hosts.Host.",
-                "node": ["HostName": "HostName", "MAC": "MACAddress",
-                         "IP": "IPAddress", "Layer2": "Layer2Interface",
-                         "Down": "MaxDSBandwidth", "Up": "MaxUSBandwidth"]
-            ]
+        // 2. Hosts 表
+        let hostRows = await query("LANDevice.1.Hosts.Host.", [
+            "HostName": "HostName", "MAC": "MACAddress",
+            "IP": "IPAddress", "Layer2": "Layer2Interface",
+            "Down": "MaxDSBandwidth", "Up": "MaxUSBandwidth"
         ])
 
         var result: [CpeHost] = []
@@ -136,8 +179,8 @@ final class CpeStore: ObservableObject {
                 name: (r["HostName"] as? String) ?? "设备",
                 mac: mac, ip: ip,
                 iface: wired ? "Ethernet" : (wifiBand[mac] ?? "Wi-Fi"),
-                downLimit: r["Down"] as? String ?? "0",
-                upLimit: r["Up"] as? String ?? "0"))
+                downLimit: (r["Down"] as? String) ?? "0",
+                upLimit: (r["Up"] as? String) ?? "0"))
         }
         for mac in onlineMacs where !seen.contains(mac) {
             result.append(CpeHost(idx: "", name: "移动设备", mac: mac, ip: "",
@@ -148,11 +191,10 @@ final class CpeStore: ObservableObject {
     }
 
     func fetchSms() async -> [CpeSms] {
-        let rows = await bridge.multipost(method: "get_xml_childnode_value", data: [
+        let rows = await mp("get_xml_childnode_value", [
             "data_1": [
                 "url": "InternetGatewayDevice.X_FH_MobileNetwork.SMS_Recv.SMS_RecvMsg.",
-                "node": ["Sender": "Sender", "Content": "Content",
-                         "RecvTime": "RecvTime"]
+                "node": ["Sender": "Sender", "Content": "Content", "RecvTime": "RecvTime"]
             ]
         ])
         return rows.compactMap { row -> CpeSms? in
@@ -167,26 +209,28 @@ final class CpeStore: ObservableObject {
     // MARK: - 控制
 
     func setToggle(node: String, on: Bool) async -> Bool {
-        let ok = await bridge.setSingle(url: node, value: on ? "1" : "0")
+        let ok = await set1(node, on ? "1" : "0")
         if ok { await fetchStatus() }
         return ok
     }
 
     func reboot() async -> Bool {
-        await bridge.runCommand("REBOOT_WEB")
+        if useNative {
+            do { try await CpeNativeAPI.shared.runCommand("REBOOT_WEB"); return true }
+            catch { return false }
+        }
+        return await bridge.runCommand("REBOOT_WEB")
     }
 
     /// 频段锁定
     func applyBandLock(enable: Bool, nr: [Int], lte: [Int]) async -> Bool {
         let ns = CpeNode.netSet
-        var ok = await bridge.setSingle(url: ns + "LockBandEnable", value: enable ? "1" : "0")
+        var ok = await set1(ns + "LockBandEnable", enable ? "1" : "0")
         if !nr.isEmpty {
-            ok = await bridge.setSingle(url: ns + "NRLockBAND",
-                                        value: nr.map(String.init).joined(separator: ",")) && ok
+            ok = await set1(ns + "NRLockBAND", nr.map(String.init).joined(separator: ",")) && ok
         }
         if !lte.isEmpty {
-            ok = await bridge.setSingle(url: ns + "LTELockBAND",
-                                        value: lte.map(String.init).joined(separator: ",")) && ok
+            ok = await set1(ns + "LTELockBAND", lte.map(String.init).joined(separator: ",")) && ok
         }
         try? await Task.sleep(nanoseconds: 2_000_000_000)
         await fetchStatus()
@@ -196,9 +240,9 @@ final class CpeStore: ObservableObject {
     /// 运营商锁定
     func applyCarrierLock(enable: Bool, serial: String) async -> Bool {
         let ns = CpeNode.netSet
-        var ok = await bridge.setSingle(url: ns + "CarrierLockEnable", value: enable ? "1" : "0")
+        var ok = await set1(ns + "CarrierLockEnable", enable ? "1" : "0")
         if !serial.isEmpty {
-            ok = await bridge.setSingle(url: ns + "CarrierSerialNum", value: serial) && ok
+            ok = await set1(ns + "CarrierSerialNum", serial) && ok
         }
         try? await Task.sleep(nanoseconds: 2_000_000_000)
         await fetchStatus()
@@ -207,7 +251,7 @@ final class CpeStore: ObservableObject {
 
     /// 重命名设备
     func renameHost(idx: String, name: String) async -> Bool {
-        await bridge.setSingle(url: "LANDevice.1.Hosts.Host.\(idx).X_FH_DevName", value: name)
+        await set1("LANDevice.1.Hosts.Host.\(idx).X_FH_DevName", name)
     }
 
     /// 限速（Mbps → Kbps）
@@ -215,15 +259,14 @@ final class CpeStore: ObservableObject {
         let base = "LANDevice.1.Hosts.Host.\(idx)."
         let dK = String(Int((Double(down) ?? 0) * 1024))
         let uK = String(Int((Double(up) ?? 0) * 1024))
-        let ok1 = await bridge.setSingle(url: base + "MaxDSBandwidth", value: dK)
-        let ok2 = await bridge.setSingle(url: base + "MaxUSBandwidth", value: uK)
+        let ok1 = await set1(base + "MaxDSBandwidth", dK)
+        let ok2 = await set1(base + "MaxUSBandwidth", uK)
         return ok1 && ok2
     }
 
     /// 发送短信
     func sendSms(to: String, text: String) async -> Bool {
-        let rows = await bridge.multipost(method: "send_sms",
-                                          data: ["phone_number": to, "content": text])
+        let rows = await mp("send_sms", ["phone_number": to, "content": text])
         _ = rows
         return true
     }
