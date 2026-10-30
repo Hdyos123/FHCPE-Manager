@@ -7,6 +7,7 @@ import SwiftUI
 
 struct LoginView: View {
     @EnvironmentObject var store: CpeStore
+    @Environment(\.colorScheme) private var scheme
     @State private var host = Settings.load().host
     @State private var user = Settings.load().user
     @State private var password = Settings.load().password   // 已记住则自动填入
@@ -22,16 +23,22 @@ struct LoginView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                // 浅色渐变背景
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.93, green: 0.95, blue: 1.0),
-                        Color(red: 0.96, green: 0.97, blue: 1.0),
-                        Color(red: 0.94, green: 0.96, blue: 1.0)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
+                // 背景：跟随系统深浅色
+                Group {
+                    if scheme == .dark {
+                        LinearGradient(
+                            colors: [Color(red: 0.07, green: 0.09, blue: 0.15),
+                                     Color(red: 0.10, green: 0.13, blue: 0.20),
+                                     Color(red: 0.08, green: 0.10, blue: 0.17)],
+                            startPoint: .top, endPoint: .bottom)
+                    } else {
+                        LinearGradient(
+                            colors: [Color(red: 0.93, green: 0.95, blue: 1.0),
+                                     Color(red: 0.96, green: 0.97, blue: 1.0),
+                                     Color(red: 0.94, green: 0.96, blue: 1.0)],
+                            startPoint: .top, endPoint: .bottom)
+                    }
+                }
                 .ignoresSafeArea()
 
                 ScrollView {
@@ -41,7 +48,7 @@ struct LoginView: View {
                         // 标题（去掉图标与副标题）
                         Text("FiberHome Manager")
                             .font(.system(size: 32, weight: .heavy))
-                            .foregroundStyle(Color(white: 0.08))
+                            .foregroundStyle(.primary)
                             .padding(.top, 70)
 
                         // 错误提示
@@ -57,7 +64,7 @@ struct LoginView: View {
                         // 底部说明
                         Text("请确保手机已连接该路由器的 Wi-Fi，密码仅保存在本机。")
                             .font(.system(size: 11.5))
-                            .foregroundStyle(Color(white: 0.6))
+                            .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 40)
                             .padding(.top, 18)
@@ -89,14 +96,14 @@ struct LoginView: View {
             HStack(spacing: 10) {
                 Text("账号")
                     .font(.system(size: 15))
-                    .foregroundStyle(Color(white: 0.5))
+                    .foregroundStyle(.secondary)
                     .frame(width: 52, alignment: .leading)
 
                 ZStack(alignment: .leading) {
                     if user.isEmpty {
                         Text("默认 superadmin / admin")
                             .font(.system(size: 15))
-                            .foregroundStyle(Color(white: 0.78))   // 极淡
+                            .foregroundStyle(.secondary.opacity(0.55))   // 极淡
                             .allowsHitTesting(false)
                     }
                     TextField("", text: $user)
@@ -121,7 +128,7 @@ struct LoginView: View {
             HStack(spacing: 10) {
                 Text("密码")
                     .font(.system(size: 15))
-                    .foregroundStyle(Color(white: 0.5))
+                    .foregroundStyle(.secondary)
                     .frame(width: 52, alignment: .leading)
 
                 Group {
@@ -146,7 +153,7 @@ struct LoginView: View {
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 15))
-                            .foregroundStyle(Color(white: 0.72))
+                            .foregroundStyle(.secondary)
                     }
                     .transition(.opacity)
                 }
@@ -159,8 +166,7 @@ struct LoginView: View {
                 } label: {
                     Image(systemName: showPassword ? "eye.slash" : "eye")
                         .font(.system(size: 15))
-                        .foregroundStyle(canReveal ? Color(white: 0.6)
-                                                   : Color(white: 0.85))
+                        .foregroundStyle(canReveal ? Color.secondary : Color.secondary.opacity(0.4))
                 }
                 .disabled(!canReveal)
                 .animation(.easeInOut(duration: 0.2), value: password.isEmpty)
@@ -183,21 +189,21 @@ struct LoginView: View {
                 HStack(spacing: 8) {
                     if busy {
                         ProgressView()
-                            .tint(Color(white: 0.25))
+                            .tint(.primary)
                     }
                     Text(busy ? "正在连接…" : "连接路由器")
                         .font(.system(size: 16.5, weight: .semibold))
-                        .foregroundStyle(Color(white: 0.15))
+                        .foregroundStyle(.primary)
                 }
                 .frame(maxWidth: .infinity)
                 .frame(height: 54)
                 .background(
                     RoundedRectangle(cornerRadius: 27, style: .continuous)
-                        .fill(Color.white.opacity(0.75))
+                        .fill(Color(.systemBackground))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 27, style: .continuous)
-                        .strokeBorder(Color(white: 0.85), lineWidth: 1)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
                 )
             }
             .disabled(busy)
@@ -207,11 +213,14 @@ struct LoginView: View {
         .padding(18)
         .background(
             RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .fill(Color.white.opacity(0.55))
+                .fill(scheme == .dark
+                      ? Color.white.opacity(0.08)
+                      : Color.white.opacity(0.55))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.9), lineWidth: 1.2)
+                .strokeBorder(Color.white.opacity(scheme == .dark ? 0.16 : 0.9),
+                              lineWidth: 1.2)
         )
         .shadow(color: Color(red: 0.6, green: 0.67, blue: 0.95).opacity(0.12),
                 radius: 24, x: 0, y: 10)
@@ -220,7 +229,11 @@ struct LoginView: View {
 
     private var fieldBackground: some View {
         RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .fill(Color.white.opacity(0.72))
+            .fill(Color(.secondarySystemBackground).opacity(0.9))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+            )
     }
 
     private func inputRow(icon: String?, label: String, text: Binding<String>,
@@ -232,7 +245,8 @@ struct LoginView: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 52, alignment: .leading)
 
-            TextField(placeholder, text: text)
+            TextField("", text: text,
+                      prompt: Text(placeholder).foregroundColor(.secondary.opacity(0.7)))
                 .font(.system(size: 16))
                 .foregroundStyle(.primary)          // 强制跟随深浅色，避免白底白字
                 .keyboardType(keyboard)
@@ -249,7 +263,7 @@ struct LoginView: View {
         HStack {
             Text(title)
                 .font(.system(size: 16))
-                .foregroundStyle(Color(white: 0.15))
+                .foregroundStyle(.primary)
             Spacer()
             Toggle("", isOn: isOn)
                 .labelsHidden()
@@ -291,7 +305,7 @@ struct LoginView: View {
                     Text("详细日志")
                         .font(.system(size: 12.5))
                 }
-                .foregroundStyle(Color(white: 0.45))
+                .foregroundStyle(.secondary)
             }
             .padding(.leading, 24)
 
@@ -299,11 +313,11 @@ struct LoginView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     if CpeNativeAPI.trace.isEmpty {
                         Text("暂无日志")
-                            .foregroundStyle(Color(white: 0.6))
+                            .foregroundStyle(.secondary)
                     } else {
                         ForEach(Array(CpeNativeAPI.trace.enumerated()), id: \.offset) { _, line in
                             Text(line)
-                                .foregroundStyle(Color(white: 0.35))
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -469,7 +483,7 @@ struct ControlView: View {
                 HStack {
                     Image(systemName: icon)
                         .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(isOn ? tint : Color(white: 0.6))
+                        .foregroundStyle(isOn ? tint : Color.secondary)
                     Spacer()
                     if busy {
                         ProgressView().scaleEffect(0.7)
@@ -478,15 +492,15 @@ struct ControlView: View {
                             .font(.system(size: 10.5, weight: .bold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 8).padding(.vertical, 3)
-                            .background(Capsule().fill(isOn ? tint : Color(white: 0.72)))
+                            .background(Capsule().fill(isOn ? tint : Color.secondary.opacity(0.3)))
                     }
                 }
                 Text(title)
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color(white: 0.15))
+                    .foregroundStyle(.primary)
                 Text(isOn ? "已开启" : "已关闭")
                     .font(.system(size: 10.5))
-                    .foregroundStyle(isOn ? tint : Color(white: 0.62))
+                    .foregroundStyle(isOn ? tint : Color.secondary)
             }
             .padding(13)
             .frame(maxWidth: .infinity, alignment: .leading)
