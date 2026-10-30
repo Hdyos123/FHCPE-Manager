@@ -1,5 +1,45 @@
 import SwiftUI
 
+
+// MARK: - 液态玻璃卡片
+
+/// 统一的液态玻璃卡片样式：渐变 + 描边 + 阴影
+struct GlassCard: ViewModifier {
+    var radius: CGFloat = 24
+    var strong: Bool = false
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .fill(.ultraThinMaterial)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(strong ? 0.85 : 0.6),
+                                Color.white.opacity(0.15),
+                                Color.white.opacity(strong ? 0.55 : 0.35)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: strong ? 1.2 : 0.9
+                    )
+            )
+            .shadow(color: Color.black.opacity(0.06), radius: 12, x: 0, y: 4)
+            .shadow(color: Color.white.opacity(0.5), radius: 1, x: 0, y: -1)
+    }
+}
+
+extension View {
+    func glassCard(radius: CGFloat = 24, strong: Bool = false) -> some View {
+        modifier(GlassCard(radius: radius, strong: strong))
+    }
+}
+
 struct HomeView: View {
     @EnvironmentObject var store: CpeStore
     @State private var showDevices = false
@@ -178,7 +218,7 @@ struct HomeView: View {
                                 .foregroundStyle(.secondary)
                         }
                         .frame(width: 76, height: 64)
-                        .background(RoundedRectangle(cornerRadius: 16).fill(.ultraThinMaterial))
+                        .glassCard(radius: 16)
                     }
                     .buttonStyle(.plain)
                 }
@@ -192,9 +232,7 @@ struct HomeView: View {
             }
         }
         .padding(16)
-        .background(RoundedRectangle(cornerRadius: 24).fill(.ultraThinMaterial))
-        .overlay(RoundedRectangle(cornerRadius: 24)
-            .strokeBorder(.white.opacity(0.35), lineWidth: 1))
+        .glassCard(radius: 24, strong: true)
     }
 
     private var memPercent: Int {
@@ -222,16 +260,23 @@ struct HomeView: View {
     private var signalGauge: some View {
         let rsrp = s.double("rsrp")
         let quality = signalQuality(rsrp)
-        let progress = min(1, max(0, (rsrp + 140) / 80))
+        // RSRP 映射到 0...1（-140 → 0，-60 → 1）
+        let progress = rsrp == 0 ? 0 : min(1, max(0, (rsrp + 140) / 80))
 
         return ZStack {
+            // 底环
             Circle()
-                .stroke(Color.secondary.opacity(0.15), lineWidth: 10)
+                .stroke(Color.secondary.opacity(0.13),
+                        style: StrokeStyle(lineWidth: 10, lineCap: .butt))
+            // 进度弧：从 12 点顺时针
             Circle()
-                .trim(from: 0, to: progress)
-                .stroke(quality.color, style: StrokeStyle(lineWidth: 10, lineCap: .round))
+                .trim(from: 0, to: max(0.001, progress))
+                .stroke(quality.color,
+                        style: StrokeStyle(lineWidth: 10, lineCap: .round,
+                                           lineJoin: .round))
                 .rotationEffect(.degrees(-90))
-                .shadow(color: quality.color.opacity(0.5), radius: 6)
+                .shadow(color: quality.color.opacity(0.35), radius: 5)
+                .animation(.easeInOut(duration: 0.6), value: progress)
             VStack(spacing: 1) {
                 Text(rsrp == 0 ? "--" : "\(Int(rsrp))")
                     .font(.system(size: 38, weight: .bold))
@@ -256,7 +301,7 @@ struct HomeView: View {
                 .font(.system(size: 15))
                 .foregroundStyle(.secondary)
                 .frame(width: 34, height: 32)
-                .background(RoundedRectangle(cornerRadius: 11).fill(.ultraThinMaterial))
+                .glassCard(radius: 11)
         }
         .buttonStyle(.plain)
     }
@@ -271,7 +316,7 @@ struct HomeView: View {
     private var speedCards: some View {
         HStack(spacing: 9) {
             speedBox("实时下行", store.realtimeRx, .blue)
-            speedBox("实时上行", store.realtimeTx, .orange)
+            speedBox("实时上行", store.realtimeTx, .orange, showRate: true)
             VStack(spacing: 2) {
                 Text("载波聚合").font(.system(size: 11)).foregroundStyle(.secondary)
                 Text("\(max(1, s.int("sccNum") + 1))CC")
@@ -280,13 +325,12 @@ struct HomeView: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
-            .background(RoundedRectangle(cornerRadius: 18).fill(.ultraThinMaterial))
-            .overlay(RoundedRectangle(cornerRadius: 18)
-                .strokeBorder(.white.opacity(0.3), lineWidth: 1))
+            .glassCard(radius: 18)
         }
     }
 
-    private func speedBox(_ label: String, _ bps: Double, _ color: Color) -> some View {
+    private func speedBox(_ label: String, _ bps: Double, _ color: Color,
+                          showRate: Bool = false) -> some View {
         let mbps = bps / 1_000_000
         let mbs = bps / 8 / 1024 / 1024
         return VStack(spacing: 2) {
@@ -303,9 +347,38 @@ struct HomeView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
-        .background(RoundedRectangle(cornerRadius: 18).fill(.ultraThinMaterial))
-        .overlay(RoundedRectangle(cornerRadius: 18)
-            .strokeBorder(.white.opacity(0.3), lineWidth: 1))
+        .overlay(alignment: .topTrailing) {
+            if showRate {
+                Menu {
+                    ForEach([0.5, 1.0, 1.5, 2.0, 3.0, 5.0], id: \.self) { v in
+                        Button {
+                            store.refreshInterval = v
+                            store.startPolling()
+                        } label: {
+                            if store.refreshInterval == v {
+                                Label(rateLabel(v), systemImage: "checkmark")
+                            } else {
+                                Text(rateLabel(v))
+                            }
+                        }
+                    }
+                } label: {
+                    Text(rateLabel(store.refreshInterval))
+                        .font(.system(size: 9.5, weight: .bold))
+                        .foregroundStyle(color)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(color.opacity(0.14)))
+                        .overlay(Capsule().strokeBorder(color.opacity(0.35), lineWidth: 0.8))
+                }
+                .offset(x: -6, y: 6)
+            }
+        }
+        .glassCard(radius: 18)
+    }
+
+    private func rateLabel(_ v: Double) -> String {
+        v == floor(v) ? "\(Int(v))s" : String(format: "%.1fs", v)
     }
 
     // MARK: - 签约卡
@@ -339,9 +412,7 @@ struct HomeView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 13)
-        .background(RoundedRectangle(cornerRadius: 18).fill(.ultraThinMaterial))
-        .overlay(RoundedRectangle(cornerRadius: 18)
-            .strokeBorder(.white.opacity(0.3), lineWidth: 1))
+        .glassCard(radius: 18)
     }
 
     // MARK: - PCC
@@ -370,9 +441,7 @@ struct HomeView: View {
             }
         }
         .padding(16)
-        .background(RoundedRectangle(cornerRadius: 24).fill(.ultraThinMaterial))
-        .overlay(RoundedRectangle(cornerRadius: 24)
-            .strokeBorder(.white.opacity(0.3), lineWidth: 1))
+        .glassCard(radius: 24)
     }
 
     private func pccKV(_ k: String, _ v: String) -> some View {
@@ -381,7 +450,7 @@ struct HomeView: View {
             Text(v.isEmpty ? "--" : v).font(.system(size: 13, weight: .bold))
         }
         .padding(.horizontal, 9).padding(.vertical, 4)
-        .background(RoundedRectangle(cornerRadius: 10).fill(.ultraThinMaterial))
+        .glassCard(radius: 10)
         .padding(.leading, 6)
     }
 
@@ -435,9 +504,7 @@ struct HomeView: View {
             }
         }
         .padding(16)
-        .background(RoundedRectangle(cornerRadius: 24).fill(.ultraThinMaterial))
-        .overlay(RoundedRectangle(cornerRadius: 24)
-            .strokeBorder(.white.opacity(0.3), lineWidth: 1))
+        .glassCard(radius: 24)
     }
 
     /// 设备只提供 TodayTotalBytes，无分方向字段
@@ -479,7 +546,7 @@ struct HomeView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 11)
-        .background(RoundedRectangle(cornerRadius: 15).fill(.ultraThinMaterial))
+        .glassCard(radius: 15)
     }
 
 }
