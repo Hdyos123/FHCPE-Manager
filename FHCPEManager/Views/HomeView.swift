@@ -18,20 +18,14 @@ struct HomeView: View {
     @Environment(\.horizontalSizeClass) private var hSize
     @Environment(\.verticalSizeClass) private var vSize
 
-    /// 大屏（iPad 横屏 / 分屏宽屏）用双栏
-    private var isWide: Bool {
-        hSize == .regular && vSize == .regular
-    }
-
     var body: some View {
         NavigationStack {
             GeometryReader { geo in
                 ScrollView(.vertical, showsIndicators: true) {
-                    if isWide {
-                        wideLayout(geo: geo)
-                    } else {
-                        compactLayout
-                    }
+                    // 始终单栏；宽屏时限制最大宽度并水平居中，保持与分屏一致的观感
+                    compactLayout
+                        .frame(maxWidth: 560)
+                        .frame(maxWidth: .infinity)
                 }
                 .frame(width: geo.size.width, height: geo.size.height)
                 .background(Color(.systemGroupedBackground))
@@ -46,12 +40,12 @@ struct HomeView: View {
             .sheet(isPresented: $showDevices) {
                 DeviceSheet(hosts: store.hosts)
                     .environmentObject(store)
-                    .presentationDetents(isWide ? [.large] : [.medium, .large])
+                    .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
             }
             .sheet(isPresented: $showModel) {
                 ModelSheet(status: s)
-                    .presentationDetents(isWide ? [.large] : [.medium])
+                    .presentationDetents([.medium])
             }
             .sheet(isPresented: $showControl) {
                 ControlView().environmentObject(store)
@@ -87,35 +81,6 @@ struct HomeView: View {
         }
         .padding(.horizontal, 14)
         .padding(.top, 6)
-        .padding(.bottom, 24)
-    }
-
-    // MARK: - 宽屏双栏布局（iPad 横屏）
-
-    private func wideLayout(geo: GeometryProxy) -> some View {
-        let maxW: CGFloat = 1000
-        let contentW = min(geo.size.width - 40, maxW)
-        let gap: CGFloat = 16
-        // 左右栏 1 : 1.15，右栏略宽容纳 PCC 四列
-        let leftW = (contentW - gap) * 0.47
-
-        return HStack(alignment: .top, spacing: gap) {
-            VStack(spacing: 14) {
-                heroCard
-                speedCards
-                contractCards
-            }
-            .frame(width: leftW)
-
-            VStack(spacing: 14) {
-                pccCard
-                trafficCard
-            }
-            .frame(maxWidth: .infinity)
-        }
-        .frame(width: contentW)
-        .frame(maxWidth: .infinity)
-        .padding(.top, 8)
         .padding(.bottom, 24)
     }
 
@@ -373,9 +338,11 @@ struct HomeView: View {
                           showRate: Bool = false) -> some View {
         let mbps = bps / 1_000_000
         let mbs = bps / 8 / 1024 / 1024
-        let color = mbps > 0 ? SpeedTier.of(mbps).color : baseColor
+        let tier = SpeedTier.of(mbps)
+        let color = mbps > 0 ? tier.color : baseColor
 
         return VStack(spacing: 0) {
+            Spacer(minLength: 0)
             Text(label)
                 .font(.system(size: 11))
                 .foregroundStyle(Color(white: 0.52))
@@ -399,7 +366,6 @@ struct HomeView: View {
                 .frame(height: 14)
 
             if mbps > 0 {
-                let tier = SpeedTier.of(mbps)
                 Text(tier.emoji + " " + tier.label)
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(tier.color)
@@ -412,6 +378,7 @@ struct HomeView: View {
             } else {
                 Color.clear.frame(height: 18)
             }
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity)
         .frame(height: 92)                          // 固定高度，绝不因内容变化
@@ -439,7 +406,7 @@ struct HomeView: View {
                         .background(Capsule().fill(Color.white.opacity(0.95)))
                         .overlay(Capsule().strokeBorder(color.opacity(0.4), lineWidth: 1))
                 }
-                .offset(x: 8, y: -8)                // 骑在卡片右上角边框上
+                .offset(x: 4, y: -4)                // 压在卡片右上角边框上
                 .haptic()
             }
         }
@@ -452,9 +419,26 @@ struct HomeView: View {
 
     // MARK: - 签约卡
 
+    /// QCI 等级说明：1~5 信令/语音，6~9 数据业务
+    private var qciSubtitle: String {
+        guard let q = Int(s["qci"]), q > 0 else { return "—" }
+        switch q {
+        case 1: return "语音"
+        case 2: return "视频通话"
+        case 3: return "游戏"
+        case 4: return "串流"
+        case 5: return "信令"
+        case 6: return "普通数据"
+        case 7: return "流媒体"
+        case 8: return "后台"
+        case 9: return "尽力而为"
+        default: return "等级 \(q)"
+        }
+    }
+
     private var contractCards: some View {
         HStack(spacing: 9) {
-            contractItem("QCI", s["qci"], "teal")
+            contractItem("QCI", s["qci"], "teal", subtitle: qciSubtitle)
             contractItem("签约下行", pick(customDown, s["dlmax"]), "blue", unit: true)
             contractItem("签约上行", pick(customUp, s["ulmax"]),
                          "orange", unit: true, editable: true)
@@ -479,10 +463,11 @@ struct HomeView: View {
 
     private func contractItem(_ label: String, _ value: String,
                               _ colorName: String, unit: Bool = false,
-                              editable: Bool = false) -> some View {
+                              editable: Bool = false, subtitle: String? = nil) -> some View {
         let color: Color = colorName == "teal" ? .teal
             : (colorName == "blue" ? .blue : .orange)
         return VStack(spacing: 0) {
+            Spacer(minLength: 0)
             Text(label)
                 .font(.system(size: 11))
                 .foregroundStyle(Color(white: 0.52))
@@ -503,6 +488,7 @@ struct HomeView: View {
             .frame(height: 26)
 
             Color.clear.frame(height: 18)
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity)
         .frame(height: 92)                          // 与速率卡等高
@@ -518,7 +504,7 @@ struct HomeView: View {
                 }
                 .buttonStyle(.plain)
                 .haptic(.medium)
-                .offset(x: 8, y: -8)                // 骑在卡片右上角边框上
+                .offset(x: 4, y: -4)                // 压在卡片右上角边框上
             }
         }
         .glassCard(radius: 18)
@@ -716,33 +702,120 @@ struct HomeView: View {
 
     // MARK: - 流量
 
+    // MARK: - 流量标注
+
+    /// 设备流量计数器约 12.5 秒刷新一次
+    private var trafficIntervalText: String {
+        guard let t = store.trafficUpdatedAt else { return "设备约 12 秒更新" }
+        let sec = Int(Date().timeIntervalSince(t))
+        return sec < 2 ? "刚刚更新" : "设备约 12 秒更新 · \(sec)s 前"
+    }
+
+
+    /// 今日流量单项：标签 + 数值 + 下方增量
+    private func todayItem(_ label: String, _ value: String,
+                           _ color: Color, _ delta: Double) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 3) {
+                Circle().fill(color).frame(width: 5, height: 5)
+                Text(label)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            Text(value)
+                .font(.system(size: 11.5, weight: .bold))
+                .foregroundStyle(color)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+
+            // 增量：有变化才显示，占位保持不跳动
+            Text(delta > 0 ? "+ " + compactBytes(delta) : " ")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(color.opacity(0.75))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
+    /// 紧凑字节格式：123 MB / 1.2 GB
+    private func compactBytes(_ n: Double) -> String {
+        if n >= 1024 * 1024 * 1024 {
+            return String(format: "%.2f GB", n / 1024 / 1024 / 1024)
+        }
+        if n >= 1024 * 1024 {
+            return String(format: "%.1f MB", n / 1024 / 1024)
+        }
+        return String(format: "%.0f KB", n / 1024)
+    }
+
     private var trafficCard: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 10) {
+            // 标题行：左上标题，右上更新周期
             HStack {
                 Text("流量统计").font(.system(size: 16, weight: .bold))
                 Spacer()
-                Text("本月累计").font(.system(size: 12)).foregroundStyle(.secondary)
+                Text(trafficIntervalText)
+                    .font(.system(size: 9))
+                    .foregroundStyle(Color(white: 0.62))
             }
 
-            HStack(spacing: 6) {
-                Text("今日")
-                    .font(.system(size: 11, weight: .bold))
-                    .padding(.horizontal, 8).padding(.vertical, 3)
-                    .background(Capsule().fill(Color.secondary.opacity(0.15)))
-                Spacer()
-                legend("下行", todayRx, .blue)
-                legend("上行", todayTx, .orange)
-                legend("合计", bytes(s["todayTotal"]), .secondary)
-            }
+            // 一组：今日 / 本月，横排三项
+            trafficGroup("今日", rx: todayRx, tx: todayTx, total: bytes(s["todayTotal"]),
+                         dRx: store.todayRxDelta, dTx: store.todayTxDelta)
 
-            HStack(spacing: 9) {
-                tile("本月合计", bytes(s["monthTotal"]), .primary)
-                tile("下行", bytes(s["monthRx"]), .blue)
-                tile("上行", bytes(s["monthTx"]), .orange)
-            }
+            Divider().opacity(0.35)
+
+            trafficGroup("本月", rx: bytes(s["monthRx"]), tx: bytes(s["monthTx"]),
+                         total: bytes(s["monthTotal"]), dRx: 0, dTx: 0)
         }
         .padding(16)
         .glassCard(radius: 24)
+    }
+
+    /// 一组流量：左侧标签 + 右侧三项（下行 / 上行 / 合计）
+    private func trafficGroup(_ title: String,
+                              rx: String, tx: String, total: String,
+                              dRx: Double, dTx: Double) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            Text(title)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.secondary)
+                .frame(width: 30, alignment: .leading)
+                .padding(.top, 1)
+
+            Spacer(minLength: 2)
+
+            trafficCell("下行", rx, .blue, dRx)
+            Spacer(minLength: 2)
+            trafficCell("上行", tx, .orange, dTx)
+            Spacer(minLength: 2)
+            trafficCell("合计", total, .secondary, 0)
+        }
+    }
+
+    /// 单项流量：小圆点 + 标签 / 数值 / 增量
+    private func trafficCell(_ label: String, _ value: String,
+                             _ color: Color, _ delta: Double) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 3) {
+                Circle().fill(color).frame(width: 5, height: 5)
+                Text(label)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+            }
+            Text(value)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(color)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            if delta > 0 {
+                Text("+ " + compactBytes(delta))
+                    .font(.system(size: 8.5, weight: .semibold))
+                    .foregroundStyle(color.opacity(0.7))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+        }
     }
 
     /// 设备只提供 TodayTotalBytes，无分方向字段
@@ -776,7 +849,11 @@ struct HomeView: View {
         HStack(spacing: 3) {
             Circle().fill(c).frame(width: 5, height: 5)
             Text(label).font(.system(size: 11)).foregroundStyle(.secondary)
-            Text(v).font(.system(size: 11.5, weight: .bold)).foregroundStyle(c)
+            Text(v)
+                .font(.system(size: 11.5, weight: .bold))
+                .foregroundStyle(c)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)   // 禁止折成两行
         }
     }
 
