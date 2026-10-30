@@ -392,6 +392,7 @@ struct ControlView: View {
                     }
                 }
             }
+            .glassListStyle()
             .navigationTitle("控制")
             }
             .alert("确认操作", isPresented: Binding(
@@ -436,7 +437,9 @@ struct ControlView: View {
 
     private func toggleRow(_ title: String, _ sub: String,
                            _ node: String, _ key: String) -> some View {
-        let serverOn = store.status[key] == "1"
+        // 设备不同字段可能返回 "1"/"0" 或 "true"/"false"
+        let raw = store.status[key].lowercased()
+        let serverOn = (raw == "1" || raw == "true" || raw == "on")
         let isOn = localOverride[node] ?? serverOn
         return Toggle(isOn: Binding(
             get: { isOn },
@@ -495,6 +498,7 @@ struct ParamView: View {
                     row("注册状态", s["regstatus"] == "0" ? "已注册" : "未注册")
                 }
             }
+            .glassListStyle()
             .navigationTitle("参数")
             }
             .toolbar {
@@ -657,6 +661,7 @@ struct SettingsView: View {
                     }
                 }
             }
+            .glassListStyle()
             .navigationTitle("设置")
             .sheet(isPresented: $showConn) {
                 ConnEditor()
