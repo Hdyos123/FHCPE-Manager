@@ -14,6 +14,7 @@ final class CpeBridge: NSObject, ObservableObject {
 
     @Published var ready = false
     @Published var lastError: String?
+    @Published var diagInfo: String?
 
     private var webView: WKWebView?
     private var host: String = "192.168.8.1"
@@ -149,12 +150,48 @@ final class CpeBridge: NSObject, ObservableObject {
     private func doJSLogin() async -> Bool {
         guard let (user, password) = loginCreds else { return false }
 
-        // 先确认页面上的函数是否就绪
-        let probe = await jsCall("function(){ return (typeof $post === 'function') ? 'yes' : 'no'; }")
-        let hasPost = (probe as? String) == "yes"
+        // 诊断：等待 $post 出现，最多重试 6 次（共约 3 秒）
+        var hasPost = false
+        for attempt in 0..<6 {
+            let probe = await jsCall("""
+            function(){
+              return JSON.stringify({
+                post: typeof $post,
+                multipost: typeof $multipost,
+                axios: typeof axios,
+                url: location.href,
+                ready: document.readyState,
+                scripts: document.scripts.length,
+                hasPwd: !!document.querySelector('input[type=password]'),
+                cookie: document.cookie.length
+              });
+            }
+            """)
+            if let str = probe as? String,
+               let d = str.data(using: .utf8),
+               let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+                hasPost = (o["post"] as? String) == "function"
+                if hasPost { break }
+                // 最后一次仍没有，把诊断信息带出来
+                if attempt == 5 {
+                    let url = o["url"] as? String ?? "?"
+                    let scripts = o["scripts"] as? Int ?? 0
+                    let ready = o["ready"] as? String ?? "?"
+                    let pwd = o["hasPwd"] as? Bool ?? false
+                    let ax = o["axios"] as? String ?? "?"
+                    let pw = pwd ? "有" : "无"
+                    lastError = "页面脚本未加载（" + ready + "），脚本数 " + String(scripts)
+                        + "，axios=" + ax + "，登录框=" + pw
+                    let pv = (o["post"] as? String) ?? "?"
+                    let mv = (o["multipost"] as? String) ?? "?"
+                    diagInfo = "URL: " + url + "\npost=" + pv + "\nmultipost=" + mv
+                }
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
         if !hasPost {
-            lastError = "页面脚本未就绪（可能需要允许本地网络权限）"
-            return false
+            // 兜底：页面函数不可用时，直接用 fetch 复刻登录流程
+            return await nativeLogin()
         }
 
         let body = """
@@ -182,6 +219,76 @@ final class CpeBridge: NSObject, ObservableObject {
             lastError = "登录无响应，请检查网络连接"
         } else {
             lastError = "登录失败（返回：\(s.prefix(30))）"
+        }
+        return false
+    }
+
+    // MARK: - 原生兜底登录（不依赖页面 $post）
+
+    /// 用页面内 fetch 直接复刻协议：
+    /// 1. 取 sessionid
+    /// 2. 用 CryptoJS 加密（若可用），否则明文
+    /// 3. POST DO_WEB_LOGIN
+    private func nativeLogin() async -> Bool {
+        guard let (user, password) = loginCreds else { return false }
+        let u = jsEscape(user), p = jsEscape(password)
+
+        let js = """
+        function(){
+          var host = location.origin;
+          function rnd(){ return String(Math.random()).replace('0.',''); }
+          return fetch(host + '/api/tmp/FHNCAPIS?ajaxmethod=get_refresh_sessionid&_=' + rnd(),
+                       {credentials:'include'})
+            .then(function(r){ return r.json(); })
+            .then(function(o){
+              var sid = o.sessionid;
+              if (!sid) throw new Error('no_sessionid');
+              var inner = JSON.stringify({
+                dataObj: {username: 'USER_PLACEHOLDER', password: 'PASS_PLACEHOLDER'},
+                ajaxmethod: 'DO_WEB_LOGIN',
+                sessionid: sid
+              });
+              var payload = inner;
+              if (typeof CryptoJS !== 'undefined') {
+                var key = CryptoJS.enc.Utf8.parse(sid.substring(0,16));
+                var iv  = CryptoJS.enc.Utf8.parse('pqrstuvwxyz{|}~');
+                var enc = CryptoJS.AES.encrypt(inner, key,
+                  {iv: iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7});
+                payload = enc.ciphertext.toString(CryptoJS.enc.Hex);
+              }
+              return fetch(host + '/api/sign/DO_WEB_LOGIN?_' + rnd(), {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json; charset=utf-8'},
+                credentials: 'include',
+                body: payload
+              }).then(function(r){ return r.text(); });
+            })
+            .then(function(t){ return t.trim(); });
+        }
+        """
+        // 用占位符替换，避免 Swift 字符串插值被转义破坏
+        .replacingOccurrences(of: "USER_PLACEHOLDER", with: u)
+        .replacingOccurrences(of: "PASS_PLACEHOLDER", with: p)
+
+        let r = await jsCall(js)
+        let str = (r as? String) ?? ""
+
+        if str.hasPrefix("0|") {
+            ready = true
+            lastError = nil
+            diagInfo = "fallback login OK"
+            return true
+        }
+        if str.hasPrefix("4") {
+            lastError = "用户名或密码错误"
+        } else if str.hasPrefix("2") || str.hasPrefix("3") {
+            lastError = "登录被锁定，请等 1 分钟"
+        } else if str.isEmpty {
+            lastError = "无法获取会话，请确认连着 CPE 的 Wi-Fi"
+        } else if str.contains("no_sessionid") {
+            lastError = "无法获取会话（设备未响应）"
+        } else {
+            lastError = "登录失败（" + String(str.prefix(40)) + "）"
         }
         return false
     }
