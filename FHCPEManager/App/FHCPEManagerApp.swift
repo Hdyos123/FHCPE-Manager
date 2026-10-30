@@ -30,6 +30,23 @@ struct RootView: View {
             } else {
                 LoginView()
             }
+
+            // 全局提示
+            if let t = store.toastText {
+                VStack {
+                    Spacer()
+                    Text(t)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(Capsule().fill(Color.black.opacity(0.78)))
+                        .padding(.bottom, 100)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+                .allowsHitTesting(false)
+                .animation(.easeInOut(duration: 0.2), value: store.toastText)
+            }
         }
         .animation(.easeInOut(duration: 0.25), value: store.isLoggedIn)
         .onAppear {
