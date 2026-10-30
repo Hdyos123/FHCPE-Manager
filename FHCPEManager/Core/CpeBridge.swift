@@ -248,7 +248,7 @@ final class CpeBridge: NSObject, ObservableObject {
               var payload = inner;
               if (typeof CryptoJS !== 'undefined') {
                 var key = CryptoJS.enc.Utf8.parse(sid.substring(0,16));
-                var iv  = CryptoJS.enc.Utf8.parse('pqrstuvwxyz{|}~');
+                var iv  = CryptoJS.enc.Utf8.parse('pqrstuvwxyz{|}~\x7f');
                 var enc = CryptoJS.AES.encrypt(inner, key,
                   {iv: iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7});
                 payload = enc.ciphertext.toString(CryptoJS.enc.Hex);
