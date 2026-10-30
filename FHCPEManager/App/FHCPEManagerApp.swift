@@ -47,6 +47,13 @@ struct RootView: View {
         .animation(.easeInOut(duration: 0.25), value: store.isLoggedIn)
         .onAppear {
             Task { await store.tryAutoLogin() }
+            // 自愈定时器：每 5 秒检查轮询是否还活着（分屏挂边时系统可能挂起 Task）
+            // 恢复屏幕常亮设置
+            UIApplication.shared.isIdleTimerDisabled =
+                UserDefaults.standard.bool(forKey: "keepAwake")
+            Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
+                Task { @MainActor in store.ensurePollingAlive() }
+            }
         }
         .onChange(of: store.isLoggedIn) { ok in
             if ok { store.startPolling() } else { store.stopPolling() }
@@ -54,12 +61,15 @@ struct RootView: View {
         .onChange(of: scenePhase) { phase in
             switch phase {
             case .active:
-                // 回到前台：恢复轮询并立即刷新
+                // 回到前台 / 分屏恢复：重启轮询并立即刷新
                 Task { await store.resumeFromBackground() }
+            case .inactive:
+                // 分屏挂边、下拉通知中心等：保持轮询，只补一次刷新
+                Task { await store.fetchStatus() }
             case .background:
-                // 进入后台：停止轮询节省资源
+                // 真正进入后台：停止轮询节省资源
                 store.stopPolling()
-            default:
+            @unknown default:
                 break
             }
         }
