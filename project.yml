@@ -1,6 +1,7 @@
 name: FHCPEManager
 options:
-  bundleIdPrefix: com.cpepanel
+  xcodeVersion: "15.0"
+  bundleIdPrefix: com.fhcpe
   deploymentTarget:
     iOS: "16.0"
   createIntermediateGroups: true
