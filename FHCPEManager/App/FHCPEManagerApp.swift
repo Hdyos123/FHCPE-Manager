@@ -54,18 +54,31 @@ struct BridgeHost: UIViewRepresentable {
 struct MainTabView: View {
     var body: some View {
         TabView {
-            HomeView()
-                .tabItem { Label("首页", systemImage: "house.fill") }
-            ControlView()
-                .tabItem { Label("控制", systemImage: "slider.horizontal.3") }
-            LockBandView()
-                .tabItem { Label("锁频", systemImage: "lock.fill") }
-            ParamView()
-                .tabItem { Label("参数", systemImage: "doc.text") }
-            SmsView()
-                .tabItem { Label("短信", systemImage: "message.fill") }
-            SettingsView()
-                .tabItem { Label("设置", systemImage: "gearshape.fill") }
+            homeTab
+            controlTab
+            lockTab
+            paramTab
+            smsTab
+            settingsTab
         }
+    }
+
+    private var homeTab: some View {
+        HomeView().tabItem { Label("首页", systemImage: "house.fill") }
+    }
+    private var controlTab: some View {
+        ControlView().tabItem { Label("控制", systemImage: "slider.horizontal.3") }
+    }
+    private var lockTab: some View {
+        LockBandView().tabItem { Label("锁频", systemImage: "lock.fill") }
+    }
+    private var paramTab: some View {
+        ParamView().tabItem { Label("参数", systemImage: "doc.text") }
+    }
+    private var smsTab: some View {
+        SmsView().tabItem { Label("短信", systemImage: "message.fill") }
+    }
+    private var settingsTab: some View {
+        SettingsView().tabItem { Label("设置", systemImage: "gearshape.fill") }
     }
 }
