@@ -21,10 +21,12 @@ targets:
       - path: FHCPEManager
         excludes:
           - "Resources/Info.plist"
+          - "Resources/Bridging-Header.h"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.fhcpe.manager
         INFOPLIST_FILE: FHCPEManager/Resources/Info.plist
+        SWIFT_OBJC_BRIDGING_HEADER: FHCPEManager/Resources/Bridging-Header.h
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: NO
         CODE_SIGNING_ALLOWED: NO
