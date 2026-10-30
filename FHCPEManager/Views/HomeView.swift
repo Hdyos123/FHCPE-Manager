@@ -4,6 +4,10 @@ struct HomeView: View {
     @EnvironmentObject var store: CpeStore
     @State private var showDevices = false
     @State private var showModel = false
+    @State private var showControl = false
+    @State private var showLock = false
+    @State private var showParam = false
+    @State private var showSms = false
 
     private var s: CpeStatus { store.status }
 
@@ -40,6 +44,18 @@ struct HomeView: View {
             .sheet(isPresented: $showModel) {
                 ModelSheet(status: s)
                     .presentationDetents(isWide ? [.large] : [.medium])
+            }
+            .sheet(isPresented: $showControl) {
+                ControlView().environmentObject(store)
+            }
+            .sheet(isPresented: $showLock) {
+                LockBandView().environmentObject(store)
+            }
+            .sheet(isPresented: $showParam) {
+                ParamView().environmentObject(store)
+            }
+            .sheet(isPresented: $showSms) {
+                SmsView().environmentObject(store)
             }
         }
     }
@@ -142,11 +158,11 @@ struct HomeView: View {
                         iconBtn("arrow.clockwise") {
                             Task { await store.fetchAll() }
                         }
-                        iconBtn("slider.horizontal.3") { }
+                        iconBtn("slider.horizontal.3") { showControl = true }
                     }
                     HStack(spacing: 7) {
-                        iconBtn("lock.fill") { }
-                        iconBtn("doc.text") { }
+                        iconBtn("lock.fill") { showLock = true }
+                        iconBtn("doc.text") { showParam = true }
                     }
                     Button {
                         showDevices = true
