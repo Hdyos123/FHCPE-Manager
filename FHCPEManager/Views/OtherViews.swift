@@ -645,7 +645,7 @@ struct SettingsView: View {
                     HStack {
                         Text("设备")
                         Spacer()
-                        Text(store.status["model"].isEmpty ? "--" : store.status["model"])
+                        Text(store.status.deviceModel)
                             .foregroundStyle(.secondary)
                     }
                 } header: {
