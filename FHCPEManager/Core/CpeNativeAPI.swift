@@ -35,23 +35,38 @@ final class CpeNativeAPI {
     // MARK: - 加解密
 
     private func cbc(_ data: Data, key: Data, encrypt: Bool) -> Data? {
-        var out = Data(count: data.count + kCCBlockSizeAES128)
-        var outLen = 0
+        let bufSize = data.count + kCCBlockSizeAES128
+        var outData = Data(count: bufSize)
+        var moved = 0
         let op = CCOperation(encrypt ? kCCEncrypt : kCCDecrypt)
-        let st = out.withUnsafeMutableBytes { o in
-            data.withUnsafeBytes { d in
-                key.withUnsafeBytes { k in
-                    iv.withUnsafeBytes { i in
-                        CCCrypt(op, CCAlgorithm(kCCAlgorithmAES), CCOptions(kCCOptionPKCS7Padding),
-                                k.baseAddress, key.count, i.baseAddress,
-                                d.baseAddress, data.count,
-                                o.baseAddress, out.count, &outLen)
+
+        // 全部数据先转成独立数组，避免闭包内相互引用
+        let inputBytes = [UInt8](data)
+        let keyBytes = [UInt8](key)
+        let ivBytes = [UInt8](iv)
+
+        let status: CCCryptorStatus = outData.withUnsafeMutableBytes { rawBuf -> CCCryptorStatus in
+            guard let outPtr = rawBuf.bindMemory(to: UInt8.self).baseAddress else {
+                return CCCryptorStatus(kCCMemoryFailure)
+            }
+            return inputBytes.withUnsafeBufferPointer { inBuf in
+                keyBytes.withUnsafeBufferPointer { keyBuf in
+                    ivBytes.withUnsafeBufferPointer { ivBuf in
+                        CCCrypt(op,
+                                CCAlgorithm(kCCAlgorithmAES),
+                                CCOptions(kCCOptionPKCS7Padding),
+                                keyBuf.baseAddress, keyBytes.count,
+                                ivBuf.baseAddress,
+                                inBuf.baseAddress, inputBytes.count,
+                                outPtr, bufSize,
+                                &moved)
                     }
                 }
             }
         }
-        guard st == kCCSuccess else { return nil }
-        return out.prefix(outLen)
+
+        guard status == kCCSuccess else { return nil }
+        return outData.prefix(moved)
     }
 
     private func encrypt(_ plain: String) -> String? {
