@@ -2,6 +2,7 @@ import SwiftUI
 
 /// 自定义签约速率输入
 struct ContractSheet: View {
+    @EnvironmentObject var store: CpeStore
     @Binding var down: String
     @Binding var up: String
     let deviceDown: String
@@ -39,6 +40,7 @@ struct ContractSheet: View {
 
                 Section {
                     Button("恢复设备实际值") {
+                        Haptic.warning()
                         d = ""
                         u = ""
                         down = ""
@@ -56,8 +58,10 @@ struct ContractSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") {
+                        Haptic.success()
                         down = d.trimmingCharacters(in: .whitespaces)
                         up = u.trimmingCharacters(in: .whitespaces)
+                        store.toast("签约速率已更新", kind: .success)
                         dismiss()
                     }
                     .bold()
