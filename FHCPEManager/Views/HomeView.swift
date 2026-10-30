@@ -113,7 +113,7 @@ struct HomeView: View {
             .navigationBarHidden(true)
             .refreshable { await store.fetchAll() }
             .onAppear {
-                // 从其它 Tab 切回首页时刷新
+                // 从其它 Tab 切回首页时补一次刷新（不重启轮询，交给 scenePhase 管理）
                 Task { await store.fetchStatus() }
             }
             .sheet(isPresented: $showDevices) {
@@ -227,21 +227,18 @@ struct HomeView: View {
                     .foregroundStyle(.secondary)
             }
 
-            HStack(alignment: .center, spacing: 8) {
-                // 左：CPU / 内存（等宽居中，修正偏右）
+            HStack(alignment: .center, spacing: 0) {
+                // 左：CPU / 内存
                 VStack(alignment: .leading, spacing: 18) {
                     miniStat("CPU 负荷", "\(s.int("cpu"))%", Double(s.int("cpu")) / 100)
                     miniStat("内存占用", "\(memPercent)%", Double(memPercent) / 100)
                 }
-                .frame(width: 92, alignment: .leading)
+                .frame(width: 88, alignment: .leading)
 
-                Spacer(minLength: 0)
-
-                // 中：信号环
+                // 中：信号环（占据剩余空间并居中，左右对称）
                 signalGauge
-                    .frame(width: 148, height: 148)
-
-                Spacer(minLength: 0)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 148)
 
                 // 右：2×2 功能键 + 设备卡
                 VStack(spacing: 8) {
@@ -273,7 +270,7 @@ struct HomeView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                .frame(width: 72)
+                .frame(width: 88)
             }
 
             HStack {
@@ -321,25 +318,30 @@ struct HomeView: View {
         return ZStack {
             // 底环
             Circle()
-                .stroke(Color.secondary.opacity(0.13),
-                        style: StrokeStyle(lineWidth: 10, lineCap: .butt))
+                .stroke(Color.secondary.opacity(0.13), lineWidth: 10)
             // 进度弧：从 12 点顺时针
             Circle()
                 .trim(from: 0, to: max(0.001, progress))
                 .stroke(quality.color,
-                        style: StrokeStyle(lineWidth: 10, lineCap: .round,
-                                           lineJoin: .round))
+                        style: StrokeStyle(lineWidth: 10, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-                .shadow(color: quality.color.opacity(0.35), radius: 5)
                 .animation(.easeInOut(duration: 0.6), value: progress)
             VStack(spacing: 1) {
                 Text(rsrp == 0 ? "--" : "\(Int(rsrp))")
                     .font(.system(size: 38, weight: .bold))
-                Text("dBm · 信号强度").font(.system(size: 9.5)).foregroundStyle(.secondary)
-                Text(quality.label).font(.system(size: 12, weight: .semibold))
+                    .fixedSize()
+                Text("dBm · 信号强度")
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+                Text(quality.label)
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(quality.color)
             }
         }
+        .padding(6)
+        .aspectRatio(1, contentMode: .fit)
+        .frame(maxWidth: 152)
     }
 
     private func signalQuality(_ r: Double) -> (label: String, color: Color) {
@@ -374,12 +376,34 @@ struct HomeView: View {
             speedBox("实时上行", store.realtimeTx, .orange, showRate: true)
             VStack(spacing: 2) {
                 Text("载波聚合").font(.system(size: 11)).foregroundStyle(.secondary)
-                Text("\(max(1, s.int("sccNum") + 1))CC")
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundStyle(.blue)
+                let ccCount = max(1, store.carriers.count)
+                HStack(spacing: 2) {
+                    Text("\(ccCount)CC")
+                        .font(.system(size: 20, weight: .bold))
+                    if ccCount >= 2 {
+                        Image(systemName: "bolt.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(ccCount >= 3 ? .purple : .green)
+                    }
+                }
+                .foregroundStyle(ccCount >= 3 ? Color.purple : (ccCount == 2 ? .green : .blue))
+
+                // 多载波时显示各频段
+                if ccCount >= 2 {
+                    HStack(spacing: 3) {
+                        ForEach(store.carriers.prefix(3)) { c in
+                            Text(c.displayBand)
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                        }
+                    }
+                }
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
+            .padding(.vertical, 11)
             .glassCard(radius: 18)
         }
     }
