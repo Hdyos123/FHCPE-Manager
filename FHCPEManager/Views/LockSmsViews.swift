@@ -85,6 +85,7 @@ struct LockBandView: View {
                         }
                     }
                     .disabled(busy)
+                    .haptic(.medium)
                 }
 
                 Section {
@@ -120,7 +121,10 @@ struct LockBandView: View {
             .task { loadCurrent() }
             .alert("确认操作", isPresented: $showConfirm) {
                 Button("取消", role: .cancel) { }
-                Button("确定") { applyPending() }
+                Button("确定") {
+                    Haptic.medium()
+                    applyPending()
+                }
             } message: {
                 Text(pendingAction == "band"
                      ? "将锁定频段，网络会重新注册并短暂断网。确定继续？"
@@ -131,7 +135,10 @@ struct LockBandView: View {
 
     private func bandRow(_ label: String, selected: Bool,
                          action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button(action: {
+            Haptic.selection()
+            action()
+        }) {
             HStack {
                 Text(label).foregroundStyle(.primary)
                 Spacer()
@@ -178,11 +185,13 @@ struct LockBandView: View {
                         enable: lockEnabled,
                         nr: Array(selectedNR).sorted(),
                         lte: Array(selectedLTE).sorted())
-                    store.toast(ok ? "频段锁定已应用" : "应用失败，请检查连接")
+                    store.toast(ok ? "频段锁定已应用" : "应用失败，请检查连接",
+                                       kind: ok ? .success : .error)
                 } else {
                     let ok = await store.applyCarrierLock(
                         enable: carrierEnabled, serial: carrierSerial)
-                    store.toast(ok ? "运营商锁定已应用" : "应用失败，请检查连接")
+                    store.toast(ok ? "运营商锁定已应用" : "应用失败，请检查连接",
+                                       kind: ok ? .success : .error)
                 }
             } catch {
                 store.errorText = (error as? LocalizedError)?.errorDescription
@@ -299,11 +308,13 @@ struct SmsView: View {
         loading = true
         defer { loading = false }
         list = await store.fetchSms()
+        if list.isEmpty { store.toast("暂无短信", kind: .info) }
     }
 
     private func sendSms() {
         Task {
             _ = await store.sendSms(to: composeTo, text: composeText)
+            store.toast("短信已发送", kind: .success)
             composeTo = ""
             composeText = ""
             showCompose = false
