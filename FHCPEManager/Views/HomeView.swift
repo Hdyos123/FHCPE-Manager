@@ -63,13 +63,25 @@ enum SpeedTier {
         }
     }
 
+    /// 档位文案（比单纯「快/慢」更有辨识度）
     var label: String {
         switch self {
-        case .ultra:  return "爆速"
-        case .fast:   return "极速"
-        case .normal: return "正常"
-        case .slow:   return "偏慢"
-        case .bad:    return "异常"
+        case .ultra:  return "起飞"
+        case .fast:   return "疾驰"
+        case .normal: return "顺畅"
+        case .slow:   return "慢跑"
+        case .bad:    return "龟速"
+        }
+    }
+
+    /// 档位 emoji，弱化文字感
+    var emoji: String {
+        switch self {
+        case .ultra:  return "🚀"
+        case .fast:   return "⚡"
+        case .normal: return "🌊"
+        case .slow:   return "🐢"
+        case .bad:    return "🐌"
         }
     }
 }
@@ -426,7 +438,7 @@ struct HomeView: View {
                 Text(String(format: "%.2f MB/s", mbs))
                     .font(.system(size: 10.5))
                 if mbps > 0 {
-                    Text(SpeedTier.of(mbps).label)
+                    Text(SpeedTier.of(mbps).emoji + " " + SpeedTier.of(mbps).label)
                         .font(.system(size: 9, weight: .semibold))
                         .padding(.horizontal, 4)
                         .padding(.vertical, 1)
@@ -488,10 +500,14 @@ struct HomeView: View {
         return c.isEmpty ? mbpsFromKbps(deviceKbps) : c
     }
 
+    /// AMBR 单位是 Kbps，签约速率通常是整百，去掉无意义的小数
     private func mbpsFromKbps(_ v: String) -> String {
         guard let k = Double(v), k > 0 else { return "--" }
         let m = k / 1000
-        return m >= 1000 ? String(format: "%.0f", m) : String(format: "%.1f", m)
+        // 307.2 → 307，3072 → 3072
+        if m >= 100 { return String(format: "%.0f", m) }
+        if m == m.rounded() { return String(format: "%.0f", m) }
+        return String(format: "%.1f", m)
     }
 
     private func contractItem(_ label: String, _ value: String,
@@ -530,30 +546,161 @@ struct HomeView: View {
     // MARK: - PCC
 
     private var pccCard: some View {
-        VStack(spacing: 14) {
-            HStack(spacing: 9) {
-                Text("PCC")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 9).padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 9).fill(.blue))
-                Text("N" + (s["band"].isEmpty ? "--" : s["band"]))
-                    .font(.system(size: 20, weight: .bold))
-                Text(s["bw"]).font(.system(size: 13)).foregroundStyle(.secondary)
-                Spacer()
-                pccKV("NRARFCN", s["arfcn"])
-                pccKV("PCI", s["pci"])
+        VStack(spacing: 12) {
+            // 每个载波一张子卡
+            ForEach(Array(store.carriers.enumerated()), id: \.element.id) { idx, c in
+                carrierRow(c, showDivider: idx > 0)
             }
 
-            HStack(spacing: 0) {
-                kpi("RSRP", s["rsrp"], "dBm", -140, -60)
-                kpi("RSRQ", s["rsrq"], "dB", -20, -3)
-                kpi("RSSI", s["rssi"], "dBm", -100, -40)
-                kpi("SINR", s["sinr"], "dB", 0, 30)
+            // 没有载波数据时用旧数据兜底
+            if store.carriers.isEmpty {
+                carrierRowFromStatus()
             }
         }
-        .padding(16)
+        .padding(14)
         .glassCard(radius: 24)
+    }
+
+    /// 单个载波信息行
+    private func carrierRow(_ c: CarrierComponent, showDivider: Bool) -> some View {
+        VStack(spacing: 10) {
+            if showDivider {
+                Rectangle()
+                    .fill(Color.white.opacity(0.6))
+                    .frame(height: 1)
+                    .padding(.vertical, 2)
+            }
+
+            HStack(spacing: 8) {
+                Text(c.tag)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8).padding(.vertical, 2.5)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7)
+                            .fill(c.isPrimary ? Color.blue : Color.orange)
+                    )
+
+                Text(c.displayBand)
+                    .font(.system(size: 19, weight: .bold))
+
+                if !c.bandwidth.isEmpty {
+                    Text(c.bandwidth)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if !c.arfcn.isEmpty {
+                    VStack(alignment: .trailing, spacing: 0) {
+                        Text("NRARFCN").font(.system(size: 8.5)).foregroundStyle(.secondary)
+                        Text(c.arfcn).font(.system(size: 11.5, weight: .semibold))
+                    }
+                }
+                if !c.pci.isEmpty {
+                    VStack(alignment: .trailing, spacing: 0) {
+                        Text("PCI").font(.system(size: 8.5)).foregroundStyle(.secondary)
+                        Text(c.pci).font(.system(size: 11.5, weight: .semibold))
+                    }
+                }
+            }
+
+            // 四指标
+            HStack(spacing: 0) {
+                metricCell("RSRP", c.rsrp, "dBm", -140, -60)
+                metricCell("RSRQ", c.rsrq, "dB", -20, -3)
+                metricCell("RSSI", c.rssi, "dBm", -100, -40)
+                metricCell("SINR", c.sinr, "dB", 0, 30)
+            }
+        }
+    }
+
+    /// 单载波兜底（沿用 status 里的主小区数据）
+    private func carrierRowFromStatus() -> some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Text("PCC")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8).padding(.vertical, 2.5)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(.blue))
+                Text("N" + (s["band"].isEmpty ? "--" : s["band"]))
+                    .font(.system(size: 19, weight: .bold))
+                Text(s["bw"]).font(.system(size: 12)).foregroundStyle(.secondary)
+                Spacer()
+                if !s["arfcn"].isEmpty {
+                    VStack(alignment: .trailing, spacing: 0) {
+                        Text("NRARFCN").font(.system(size: 8.5)).foregroundStyle(.secondary)
+                        Text(s["arfcn"]).font(.system(size: 11.5, weight: .semibold))
+                    }
+                }
+                if !s["pci"].isEmpty {
+                    VStack(alignment: .trailing, spacing: 0) {
+                        Text("PCI").font(.system(size: 8.5)).foregroundStyle(.secondary)
+                        Text(s["pci"]).font(.system(size: 11.5, weight: .semibold))
+                    }
+                }
+            }
+            HStack(spacing: 0) {
+                metricCell("RSRP", s["rsrp"], "dBm", -140, -60)
+                metricCell("RSRQ", s["rsrq"], "dB", -20, -3)
+                metricCell("RSSI", s["rssi"], "dBm", -100, -40)
+                metricCell("SINR", s["sinr"], "dB", 0, 30)
+            }
+        }
+    }
+
+    /// 指标单元（带彩色进度条）
+    private func metricCell(_ label: String, _ value: String, _ unit: String,
+                            _ lo: Double, _ hi: Double) -> some View {
+        let v = Double(value) ?? 0
+        let p = min(1, max(0, (v - lo) / (hi - lo)))
+        let color = metricColor(label, v)
+        return VStack(spacing: 3) {
+            Text(label)
+                .font(.system(size: 9.5))
+                .foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline, spacing: 1) {
+                Text(value.isEmpty ? "--" : value)
+                    .font(.system(size: 14, weight: .bold))
+                Text(unit).font(.system(size: 8)).foregroundStyle(.secondary)
+            }
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.secondary.opacity(0.15)).frame(height: 4)
+                GeometryReader { g in
+                    Capsule().fill(color)
+                        .frame(width: max(3, g.size.width * p), height: 4)
+                }
+                .frame(height: 4)
+            }
+            .padding(.horizontal, 8)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func metricColor(_ label: String, _ v: Double) -> Color {
+        switch label {
+        case "RSRP":
+            if v > -85 { return .blue }
+            if v > -100 { return .green }
+            if v > -110 { return .orange }
+            return .red
+        case "RSRQ":
+            if v > -10 { return .green }
+            if v > -15 { return .orange }
+            return .red
+        case "RSSI":
+            if v > -65 { return .teal }
+            if v > -80 { return .orange }
+            return .red
+        case "SINR":
+            if v >= 13 { return .green }
+            if v >= 5 { return .orange }
+            return .red
+        default:
+            return .blue
+        }
     }
 
     private func pccKV(_ k: String, _ v: String) -> some View {
