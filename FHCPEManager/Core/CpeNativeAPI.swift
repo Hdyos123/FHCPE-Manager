@@ -41,45 +41,63 @@ final class CpeNativeAPI {
 
     // MARK: - 加解密
 
-    private func cbc(_ data: Data, key: Data, encrypt: Bool) -> Data? {
-        let bufSize = data.count + kCCBlockSizeAES128
-        var outData = Data(count: bufSize)
+    /// AES-128-CBC + PKCS7，与设备前端完全一致
+    /// key = sessionid 前 16 字节，iv = "pqrstuvwxyz{|}~"
+    private func cbc(_ data: Data, key: Data, encrypt op: Bool) -> Data? {
+        guard key.count == 16 else {
+            Self.log("cbc: key length != 16 (\(key.count))")
+            return nil
+        }
+        let inBytes = Array(data)
+        let keyBytes = Array(key)
+        let ivBytes = Array(iv)
+        guard ivBytes.count == 16 else {
+            Self.log("cbc: iv length != 16")
+            return nil
+        }
+
+        let bufSize = inBytes.count + kCCBlockSizeAES128
+        var out = [UInt8](repeating: 0, count: bufSize)
         var moved = 0
-        let op = CCOperation(encrypt ? kCCEncrypt : kCCDecrypt)
 
-        // 全部数据先转成独立数组，避免闭包内相互引用
-        let inputBytes = [UInt8](data)
-        let keyBytes = [UInt8](key)
-        let ivBytes = [UInt8](iv)
-
-        let status: CCCryptorStatus = outData.withUnsafeMutableBytes { rawBuf -> CCCryptorStatus in
-            guard let outPtr = rawBuf.bindMemory(to: UInt8.self).baseAddress else {
-                return CCCryptorStatus(kCCMemoryFailure)
-            }
-            return inputBytes.withUnsafeBufferPointer { inBuf in
-                keyBytes.withUnsafeBufferPointer { keyBuf in
-                    ivBytes.withUnsafeBufferPointer { ivBuf in
-                        CCCrypt(op,
-                                CCAlgorithm(kCCAlgorithmAES),
+        let status = out.withUnsafeMutableBufferPointer { outBuf -> CCCryptorStatus in
+            inBytes.withUnsafeBufferPointer { inBuf -> CCCryptorStatus in
+                keyBytes.withUnsafeBufferPointer { keyBuf -> CCCryptorStatus in
+                    ivBytes.withUnsafeBufferPointer { ivBuf -> CCCryptorStatus in
+                        CCCrypt(CCOperation(op ? kCCEncrypt : kCCDecrypt),
+                                CCAlgorithm(kCCAlgorithmAES128),
                                 CCOptions(kCCOptionPKCS7Padding),
                                 keyBuf.baseAddress, keyBytes.count,
                                 ivBuf.baseAddress,
-                                inBuf.baseAddress, inputBytes.count,
-                                outPtr, bufSize,
+                                inBuf.baseAddress, inBytes.count,
+                                outBuf.baseAddress, bufSize,
                                 &moved)
                     }
                 }
             }
         }
 
-        guard status == kCCSuccess else { return nil }
-        return outData.prefix(moved)
+        if status != kCCSuccess {
+            Self.log("cbc: CCCrypt status=\(status), in=\(inBytes.count), out=\(bufSize)")
+            return nil
+        }
+        return Data(out[0..<moved])
     }
 
     private func encrypt(_ plain: String) -> String? {
-        guard sid.count >= 16, let kd = sid.prefix(16).data(using: .utf8),
-              let pd = plain.data(using: .utf8),
-              let enc = cbc(pd, key: kd, encrypt: true) else { return nil }
+        guard sid.count >= 16 else {
+            Self.log("encrypt: sid too short (\(sid.count))")
+            return nil
+        }
+        guard let kd = String(sid.prefix(16)).data(using: .utf8), kd.count == 16 else {
+            Self.log("encrypt: key derive failed")
+            return nil
+        }
+        guard let pd = plain.data(using: .utf8) else {
+            Self.log("encrypt: utf8 encode failed")
+            return nil
+        }
+        guard let enc = cbc(pd, key: kd, encrypt: true) else { return nil }
         return enc.map { String(format: "%02x", $0) }.joined()
     }
 
@@ -94,6 +112,24 @@ final class CpeNativeAPI {
         }
         guard let dec = cbc(Data(bytes), key: kd, encrypt: false) else { return nil }
         return String(data: dec, encoding: .utf8)
+    }
+
+    // MARK: - 自检
+
+    /// 用已知测试向量验证加密实现
+    /// 明文/密文由 Python 版（已验证可用）生成
+    func selfTest() -> (ok: Bool, detail: String) {
+        let savedSid = sid
+        sid = "abcdefghijklmnop1234567890abcdef"
+        let plain = #"{"dataObj":{"username":"admin","password":"test"},"ajaxmethod":"DO_WEB_LOGIN","sessionid":"abcdefghijklmnop1234567890abcdef"}"#
+        let expect = "e14bf4917f7fea1e6eae03934f104fbe6b3cb2fa5b4bc4c13b50eb4f2eaaa90e"
+            + "165b4795a8d73e09bd4866c28da3c40deec597029e8186741ec80001a05fdd0c"
+            + "96e1a3b9ef5f09216447c749dbef163fe5a9f713915ad6b83bdf16a0fa510bb9"
+            + "d0286d8b56b95ac468c18fd00bbf3c523c9705811eaab5632f3d2e027a7637f5"
+        let got = encrypt(plain) ?? "<nil>"
+        sid = savedSid
+        let ok = got.lowercased() == expect.lowercased()
+        return (ok, ok ? "加密自检通过" : "加密自检失败\n期望: \(expect.prefix(32))…\n实际: \(got.prefix(32))…")
     }
 
     // MARK: - 请求
