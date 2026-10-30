@@ -12,12 +12,19 @@ final class CpeNativeAPI {
     private var sid: String = ""
     private let iv = Data("pqrstuvwxyz{|}~".utf8)
 
+    /// 诊断：记录每一步原始响应
+    static var trace: [String] = []
+    static func log(_ s: String) {
+        trace.append(s)
+        if trace.count > 20 { trace.removeFirst() }
+    }
+
     private let session: URLSession
 
     private init() {
         let cfg = URLSessionConfiguration.ephemeral
-        cfg.timeoutIntervalForRequest = 8
-        cfg.timeoutIntervalForResource = 12
+        cfg.timeoutIntervalForRequest = 15
+        cfg.timeoutIntervalForResource = 25
         cfg.httpShouldSetCookies = true
         cfg.httpCookieAcceptPolicy = .always
         cfg.httpCookieStorage = HTTPCookieStorage.shared
@@ -109,7 +116,10 @@ final class CpeNativeAPI {
         }
         let (data, resp) = try await session.data(for: req)
         guard let http = resp as? HTTPURLResponse else { throw NError.badResponse }
-        if http.statusCode == 400 { throw NError.locked }
+        if http.statusCode == 400 {
+            Self.log("HTTP 400 for " + path)
+            throw NError.crypto   // 400 多为加密/payload 问题，不是锁定
+        }
         guard http.statusCode == 200 else { throw NError.http(http.statusCode) }
         return String(data: data, encoding: .utf8) ?? ""
     }
@@ -140,6 +150,8 @@ final class CpeNativeAPI {
 
         // 3. POST 登录
         let r = try await request("/api/sign/DO_WEB_LOGIN?_\(rnd())", body: payload)
+        Self.log("login raw: " + String(r.prefix(80)))
+        Self.log("payload len: \(payload.count), escaped: \(payload.allSatisfy { $0.isHexDigit })")
         switch LoginCode.parse(r) {
         case .ok:               return
         case .badCredentials:   throw NError.badCredentials
