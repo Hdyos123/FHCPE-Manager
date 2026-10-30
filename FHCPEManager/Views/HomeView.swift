@@ -1,91 +1,6 @@
 import SwiftUI
 
 
-// MARK: - 液态玻璃卡片
-
-/// 统一的液态玻璃卡片样式（性能优先：单层阴影 + 描边）
-struct GlassCard: ViewModifier {
-    var radius: CGFloat = 24
-    var strong: Bool = false
-
-    func body(content: Content) -> some View {
-        content
-            .background(
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .fill(Color(.secondarySystemGroupedBackground).opacity(0.72))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .strokeBorder(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(strong ? 0.9 : 0.65),
-                                Color.white.opacity(0.18),
-                                Color.white.opacity(strong ? 0.5 : 0.32)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: strong ? 1.2 : 0.9
-                    )
-            )
-    }
-}
-
-extension View {
-    func glassCard(radius: CGFloat = 24, strong: Bool = false) -> some View {
-        modifier(GlassCard(radius: radius, strong: strong))
-    }
-}
-
-
-// MARK: - 速率分档配色
-
-/// 实测阈值：≥125 爆速 / ≥100 极速 / ≥20 正常 / ≥5 偏慢 / 其余异常
-enum SpeedTier {
-    case ultra, fast, normal, slow, bad
-
-    static func of(_ mbps: Double) -> SpeedTier {
-        if mbps >= 125 { return .ultra }
-        if mbps >= 100 { return .fast }
-        if mbps >= 20  { return .normal }
-        if mbps >= 5   { return .slow }
-        return .bad
-    }
-
-    var color: Color {
-        switch self {
-        case .ultra:  return Color(red: 0.55, green: 0.36, blue: 0.96)  // 紫 #8B5CF6
-        case .fast:   return Color(red: 0.09, green: 0.72, blue: 0.65)  // 青绿 #17B8A6
-        case .normal: return Color(red: 0.24, green: 0.55, blue: 0.99)  // 蓝 #3D8BFD
-        case .slow:   return Color(red: 0.94, green: 0.63, blue: 0.29)  // 橙 #F0A04B
-        case .bad:    return Color(red: 0.90, green: 0.34, blue: 0.30)  // 红 #E5574D
-        }
-    }
-
-    /// 档位文案（比单纯「快/慢」更有辨识度）
-    var label: String {
-        switch self {
-        case .ultra:  return "起飞"
-        case .fast:   return "疾驰"
-        case .normal: return "顺畅"
-        case .slow:   return "慢跑"
-        case .bad:    return "龟速"
-        }
-    }
-
-    /// 档位 emoji，弱化文字感
-    var emoji: String {
-        switch self {
-        case .ultra:  return "🚀"
-        case .fast:   return "⚡"
-        case .normal: return "🌊"
-        case .slow:   return "🐢"
-        case .bad:    return "🐌"
-        }
-    }
-}
-
 struct HomeView: View {
     @EnvironmentObject var store: CpeStore
     @State private var showDevices = false
@@ -222,28 +137,27 @@ struct HomeView: View {
 
                 Spacer()
 
-                if let t = s.temperature {
-                    HStack(spacing: 3) {
-                        Image(systemName: "thermometer.medium")
-                            .font(.system(size: 10))
-                        Text(String(format: "%.1f°", t))
-                            .font(.system(size: 12, weight: .bold))
-                    }
-                    .foregroundStyle(.green)
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(Capsule().fill(Color(.secondarySystemGroupedBackground).opacity(0.85)))
-                }
-
-                Text(s["model"].isEmpty ? "CPE" : s["model"])
+                Text(s.deviceModel)
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(.secondary)
             }
 
             HStack(alignment: .center, spacing: 0) {
-                // 左：CPU / 内存
-                VStack(alignment: .leading, spacing: 18) {
+                // 左：CPU / 内存 / 温度
+                VStack(alignment: .leading, spacing: 14) {
                     miniStat("CPU 负荷", "\(s.int("cpu"))%", Double(s.int("cpu")) / 100)
                     miniStat("内存占用", "\(memPercent)%", Double(memPercent) / 100)
+                    if let t = s.temperature {
+                        // 只保留图标 + 数值，省掉「模组温度」文字
+                        HStack(spacing: 3) {
+                            Image(systemName: "thermometer.medium")
+                                .font(.system(size: 12))
+                            Text(String(format: "%.1f°C", t))
+                                .font(.system(size: 17, weight: .bold))
+                        }
+                        .foregroundStyle(tempColor(t))
+                        .frame(width: 88, alignment: .leading)
+                    }
                 }
                 .frame(width: 88, alignment: .leading)
 
@@ -252,18 +166,22 @@ struct HomeView: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: 148)
 
-                // 右：2×2 功能键 + 设备卡
+                // 右：2×2 功能键 + 设备卡（网格均分，四个按钮完全等大）
                 VStack(spacing: 8) {
-                    HStack(spacing: 8) {
-                        iconBtn("arrow.clockwise") {
-                            Task { await store.fetchAll() }
+                    Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+                        GridRow {
+                            iconBtn("arrow.clockwise") {
+                                Task { await store.fetchAll() }
+                            }
+                            iconBtn("slider.horizontal.3") { showControl = true }
                         }
-                        iconBtn("slider.horizontal.3") { showControl = true }
+                        GridRow {
+                            iconBtn("lock.fill") { showLock = true }
+                            iconBtn("doc.text") { showParam = true }
+                        }
                     }
-                    HStack(spacing: 8) {
-                        iconBtn("lock.fill") { showLock = true }
-                        iconBtn("doc.text") { showParam = true }
-                    }
+                    .frame(width: 84)
+
                     Button {
                         showDevices = true
                     } label: {
@@ -277,12 +195,12 @@ struct HomeView: View {
                                 .font(.system(size: 9.5))
                                 .foregroundStyle(.secondary)
                         }
-                        .frame(width: 72, height: 62)
+                        .frame(width: 84, height: 62)
                         .glassCard(radius: 15)
                     }
                     .buttonStyle(.plain)
                 }
-                .frame(width: 88)
+                .frame(width: 84)
             }
 
             HStack {
@@ -300,6 +218,13 @@ struct HomeView: View {
         let total = s.int("memTotal"), free = s.int("memFree")
         guard total > 0 else { return 0 }
         return Int(Double(total - free) / Double(total) * 100)
+    }
+
+    /// 温度配色：<42 散热良好，42~50 偏热，>50 过热
+    private func tempColor(_ t: Double) -> Color {
+        if t >= 50 { return .red }
+        if t >= 42 { return .orange }
+        return .green
     }
 
     private func miniStat(_ label: String, _ value: String, _ p: Double) -> some View {
@@ -367,17 +292,30 @@ struct HomeView: View {
     private func iconBtn(_ name: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: name)
-                .font(.system(size: 15))
-                .foregroundStyle(.secondary)
-                .frame(width: 34, height: 32)
-                .glassCard(radius: 11)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Color(white: 0.38))
+                .frame(width: 38, height: 38)     // 正方形，视觉重量一致
+                .glassCard(radius: 12)
         }
         .buttonStyle(.plain)
     }
 
+    /// 连续运行时间：精确到分钟。3 天 5 小时 12 分钟
     private var uptimeText: String {
-        let h = store.status.int("uptime") / 3600
-        return h > 0 ? "\(h) 小时" : "\(store.status.int("uptime") / 60) 分钟"
+        let total = max(0, store.status.int("uptime"))       // 秒
+        if total == 0 { return "--" }
+        let days = total / 86400
+        let hours = (total % 86400) / 3600
+        let mins = (total % 3600) / 60
+
+        if days > 0 {
+            return hours > 0 ? "\(days) 天 \(hours) 小时 \(mins) 分钟"
+                             : "\(days) 天 \(mins) 分钟"
+        }
+        if hours > 0 {
+            return mins > 0 ? "\(hours) 小时 \(mins) 分钟" : "\(hours) 小时"
+        }
+        return "\(mins) 分钟"
     }
 
     // MARK: - 速率卡
@@ -389,33 +327,31 @@ struct HomeView: View {
             VStack(spacing: 2) {
                 Text("载波聚合").font(.system(size: 11)).foregroundStyle(.secondary)
                 let ccCount = max(1, store.carriers.count)
-                HStack(spacing: 2) {
-                    Text("\(ccCount)CC")
-                        .font(.system(size: 20, weight: .bold))
-                    if ccCount >= 2 {
-                        Image(systemName: "bolt.fill")
-                            .font(.system(size: 10))
-                            .foregroundStyle(ccCount >= 3 ? .purple : .green)
-                    }
-                }
-                .foregroundStyle(ccCount >= 3 ? Color.purple : (ccCount == 2 ? .green : .blue))
+                let tierColor: Color = ccCount >= 3 ? .purple : (ccCount == 2 ? .green : .blue)
 
-                // 多载波时显示各频段
+                Text("\(ccCount)CC")
+                    .font(.system(size: 21, weight: .bold, design: .rounded))
+                    .foregroundStyle(tierColor)
+
+                // 多载波时把各频段做成一排小胶囊
                 if ccCount >= 2 {
-                    HStack(spacing: 3) {
+                    HStack(spacing: 4) {
                         ForEach(store.carriers.prefix(3)) { c in
                             Text(c.displayBand)
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 1)
-                                .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                                .font(.system(size: 9.5, weight: .semibold))
+                                .foregroundStyle(c.isPrimary ? Color.blue : Color.orange)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(
+                                    Capsule().fill((c.isPrimary ? Color.blue : Color.orange).opacity(0.13))
+                                )
                         }
                     }
+                    .padding(.top, 1)
                 }
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 11)
+            .frame(height: 78)          // 与左右速率卡同高，避免视觉缩水
             .glassCard(radius: 18)
         }
     }
@@ -426,26 +362,46 @@ struct HomeView: View {
         let mbs = bps / 8 / 1024 / 1024
         // 分档着色；无数据时用基础色
         let color = mbps > 0 ? SpeedTier.of(mbps).color : baseColor
-        return VStack(spacing: 2) {
-            Text(label).font(.system(size: 11)).foregroundStyle(.secondary)
-            HStack(alignment: .firstTextBaseline, spacing: 2) {
+        return VStack(spacing: 1) {
+            // 标签
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundStyle(Color(white: 0.52))
+                .padding(.bottom, 2)
+
+            // 主数值 + 单位（基线对齐，单位与数值同色系）
+            HStack(alignment: .firstTextBaseline, spacing: 1) {
                 Text(String(format: "%.2f", mbps))
-                    .font(.system(size: 20, weight: .bold))
+                    .font(.system(size: 21, weight: .bold, design: .rounded))
                     .foregroundStyle(color)
-                Text("Mbps").font(.system(size: 9.5)).foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                Text("Mbps")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(color.opacity(0.55))
             }
-            HStack(spacing: 3) {
-                Text(String(format: "%.2f MB/s", mbs))
-                    .font(.system(size: 10.5))
-                if mbps > 0 {
-                    Text(SpeedTier.of(mbps).emoji + " " + SpeedTier.of(mbps).label)
-                        .font(.system(size: 9, weight: .semibold))
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(color.opacity(0.15)))
-                }
+            .fixedSize(horizontal: false, vertical: true)
+
+            // 副数值
+            Text(String(format: "%.2f MB/s", mbs))
+                .font(.system(size: 10, weight: .regular))
+                .foregroundStyle(Color(white: 0.55))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .padding(.top, 1)
+
+            if mbps > 0 {
+                let tier = SpeedTier.of(mbps)
+                Text(tier.emoji + " " + tier.label)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(tier.color)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(tier.color.opacity(0.12)))
+                    .padding(.top, 3)
             }
-            .foregroundStyle(color.opacity(0.8))
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
@@ -468,12 +424,14 @@ struct HomeView: View {
                     Text(rateLabel(store.refreshInterval))
                         .font(.system(size: 9.5, weight: .bold))
                         .foregroundStyle(color)
-                        .padding(.horizontal, 6)
+                        .padding(.horizontal, 7)
                         .padding(.vertical, 3)
-                        .background(Capsule().fill(color.opacity(0.14)))
-                        .overlay(Capsule().strokeBorder(color.opacity(0.35), lineWidth: 0.8))
+                        .background(Capsule().fill(Color.white.opacity(0.92)))
+                        .overlay(Capsule().strokeBorder(color.opacity(0.45), lineWidth: 1))
+                        .shadow(color: color.opacity(0.2), radius: 2, x: 0, y: 1)
                 }
-                .offset(x: 7, y: -7)
+                .padding(.top, 6)
+                .padding(.trailing, 7)
             }
         }
         .glassCard(radius: 18)
@@ -515,17 +473,26 @@ struct HomeView: View {
                               editable: Bool = false) -> some View {
         let color: Color = colorName == "teal" ? .teal
             : (colorName == "blue" ? .blue : .orange)
-        return VStack(spacing: 4) {
-            Text(label).font(.system(size: 11)).foregroundStyle(.secondary)
-            HStack(alignment: .firstTextBaseline, spacing: 2) {
+        return VStack(spacing: 1) {
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundStyle(Color(white: 0.52))
+                .padding(.bottom, 2)
+            HStack(alignment: .firstTextBaseline, spacing: 1) {
                 Text(value.isEmpty ? "--" : value)
-                    .font(.system(size: 19, weight: .bold))
+                    .font(.system(size: 21, weight: .bold, design: .rounded))
                     .foregroundStyle(color)
-                if unit { Text("Mbps").font(.system(size: 9.5)).foregroundStyle(.secondary) }
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                if unit {
+                    Text("Mbps")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(color.opacity(0.55))
+                }
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 13)
+        .frame(height: 78)          // 与速率卡等高
         .overlay(alignment: .topTrailing) {
             if editable {
                 Button { showContract = true } label: {
@@ -533,11 +500,13 @@ struct HomeView: View {
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(color)
                         .frame(width: 20, height: 20)
-                        .background(Circle().fill(color.opacity(0.14)))
-                        .overlay(Circle().strokeBorder(color.opacity(0.35), lineWidth: 0.8))
+                        .background(Circle().fill(Color.white.opacity(0.92)))
+                        .overlay(Circle().strokeBorder(color.opacity(0.45), lineWidth: 1))
+                        .shadow(color: color.opacity(0.2), radius: 2, x: 0, y: 1)
                 }
                 .buttonStyle(.plain)
-                .offset(x: 7, y: -7)
+                .padding(.top, 6)
+                .padding(.trailing, 7)
             }
         }
         .glassCard(radius: 18)
