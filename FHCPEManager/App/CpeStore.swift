@@ -365,4 +365,18 @@ final class CpeStore: ObservableObject {
         pollTask?.cancel()
         pollTask = nil
     }
+
+    /// 从后台回到前台：重建会话并立即刷新
+    func resumeFromBackground() async {
+        guard isLoggedIn else { return }
+        // 会话可能已失效，重新登录
+        let cfg = Settings.load()
+        if cfg.isConfigured {
+            CpeNativeAPI.shared.configure(host: cfg.host, user: cfg.user, pass: cfg.password)
+            _ = try? await CpeNativeAPI.shared.login()
+            useNative = true
+        }
+        await fetchAll()
+        startPolling()
+    }
 }
