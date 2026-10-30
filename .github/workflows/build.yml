@@ -30,24 +30,16 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      - name: Set version from tag
+      - name: Resolve version
+        id: ver
         run: |
-          # 优先用手动输入的版本号；否则用 tag；最后回退
           VER="${{ inputs.version }}"
-          echo "inputs.version = $VER"
-          if [ -z "$VER" ]; then
-            VER="${GITHUB_REF_NAME#v}"
-          fi
-          if ! [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            VER="1.1.2"
-          fi
+          if [ -z "$VER" ]; then VER="${GITHUB_REF_NAME#v}"; fi
+          if ! [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then VER="1.1.2"; fi
           BUILD=$(date +%m%d%H)
+          echo "VER=$VER" >> $GITHUB_ENV
+          echo "BUILD=$BUILD" >> $GITHUB_ENV
           echo "version=$VER build=$BUILD"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VER" FHCPEManager/Resources/Info.plist
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" FHCPEManager/Resources/Info.plist
-          sed -i '' "s/MARKETING_VERSION: .*/MARKETING_VERSION: \"$VER\"/" project.yml
-          sed -i '' "s/CURRENT_PROJECT_VERSION: .*/CURRENT_PROJECT_VERSION: $BUILD/" project.yml
-          grep -A1 CFBundleShortVersionString FHCPEManager/Resources/Info.plist
 
       - name: Generate Xcode project
         run: |
@@ -62,6 +54,22 @@ jobs:
             sed -i '' "s/objectVersion = $OBJ;/objectVersion = 60;/" *.xcodeproj/project.pbxproj
             grep -m1 "objectVersion" *.xcodeproj/project.pbxproj
           fi
+
+      - name: Apply version to project
+        run: |
+          echo "应用版本 $VER ($BUILD)"
+          # 1. Info.plist 硬编码
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VER" FHCPEManager/Resources/Info.plist || \
+          /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $VER" FHCPEManager/Resources/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" FHCPEManager/Resources/Info.plist || \
+          /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $BUILD" FHCPEManager/Resources/Info.plist
+          # 2. 工程构建设置（覆盖 XcodeGen 生成的值）
+          sed -i '' -E "s/MARKETING_VERSION = [^;]+;/MARKETING_VERSION = $VER;/g" FHCPEManager.xcodeproj/project.pbxproj
+          sed -i '' -E "s/CURRENT_PROJECT_VERSION = [^;]+;/CURRENT_PROJECT_VERSION = $BUILD;/g" FHCPEManager.xcodeproj/project.pbxproj
+          echo "--- 校验 ---"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" FHCPEManager/Resources/Info.plist
+          /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" FHCPEManager/Resources/Info.plist
+          grep -m2 "MARKETING_VERSION" FHCPEManager.xcodeproj/project.pbxproj
 
       - name: Build (unsigned)
         run: |
