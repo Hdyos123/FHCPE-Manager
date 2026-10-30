@@ -11,6 +11,7 @@ struct LoginView: View {
     @State private var busy = false
 
     var body: some View {
+        NavigationStack {
         ZStack {
             Color(.systemGroupedBackground).ignoresSafeArea()
             ScrollView {
@@ -120,6 +121,7 @@ struct LoginView: View {
                 }
                 .padding(.horizontal, 22)
             }
+        }
         }
     }
 
@@ -532,6 +534,11 @@ struct DiagView: View {
         let h = host.trimmingCharacters(in: .whitespaces)
         let u = user.trimmingCharacters(in: .whitespaces)
         let p = pass.isEmpty ? Settings.load().password : pass
+
+        // 0. 加密自检
+        let st = CpeNativeAPI.shared.selfTest()
+        lines.append(st.ok ? "✓ \(st.detail)" : "✗ \(st.detail)")
+        lines.append("")
 
         lines.append("地址: \(h)")
         lines.append("账号: \(u)")
