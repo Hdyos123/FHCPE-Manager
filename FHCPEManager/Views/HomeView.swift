@@ -112,6 +112,10 @@ struct HomeView: View {
             .ignoresSafeArea(edges: .bottom)
             .navigationBarHidden(true)
             .refreshable { await store.fetchAll() }
+            .onAppear {
+                // 从其它 Tab 切回首页时刷新
+                Task { await store.fetchStatus() }
+            }
             .sheet(isPresented: $showDevices) {
                 DeviceSheet(hosts: store.hosts)
                     .environmentObject(store)
