@@ -6,6 +6,14 @@ final class CpeStore: ObservableObject {
     @Published var status = CpeStatus()
     @Published var hosts: [CpeHost] = []
     @Published var carriers: [CarrierComponent] = []
+
+    /// 流量增量（距上次设备计数变化），单位字节
+    @Published var todayRxDelta: Double = 0
+    @Published var todayTxDelta: Double = 0
+    /// 设备流量计数器上次变化的时间，用于显示「xx 秒更新」
+    @Published var trafficUpdatedAt: Date?
+
+    private var lastTodayTotal: Double = 0
     @Published var smsList: [CpeSms] = []
     @Published var isLoggedIn = false
     @Published var isLoading = false
@@ -243,6 +251,29 @@ final class CpeStore: ObservableObject {
         status.raw = v
         realtimeRx = status.realtimeRx
         realtimeTx = status.realtimeTx
+
+        // ── 流量增量追踪 ──
+        let total = status.double("todayTotal")
+        if total > 0 {
+            if lastTodayTotal > 0 && total > lastTodayTotal {
+                let delta = total - lastTodayTotal
+                // 按本月上下行比例拆分增量
+                let mRx = status.double("monthRx"), mTx = status.double("monthTx")
+                let sum = mRx + mTx
+                if sum > 0 {
+                    todayRxDelta += delta * mRx / sum
+                    todayTxDelta += delta * mTx / sum
+                }
+                trafficUpdatedAt = Date()
+            }
+            lastTodayTotal = total
+        }
+    }
+
+    /// 重置增量（用户手动清空时调用）
+    func resetTrafficDelta() {
+        todayRxDelta = 0
+        todayTxDelta = 0
     }
 
     func fetchHosts() async {
