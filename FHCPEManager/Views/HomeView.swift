@@ -339,7 +339,7 @@ struct HomeView: View {
                 // 多载波时把各频段做成一排小胶囊
                 if ccCount >= 2 {
                     HStack(spacing: 4) {
-                        ForEach(store.carriers.prefix(3)) { c in
+                        ForEach(Array(store.carriers.prefix(3))) { c in
                             Text(c.displayBand)
                                 .font(.system(size: 9.5, weight: .semibold))
                                 .foregroundStyle(c.isPrimary ? Color.blue : Color.orange)
