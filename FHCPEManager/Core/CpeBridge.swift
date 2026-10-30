@@ -341,12 +341,16 @@ final class CpeBridge: NSObject, ObservableObject {
         function(){
           return $multipost('get_value_by_xmlnode', \(mapStr))
             .then(function(r){
-              var d = (r && r.data_1) ? r.data_1 : (r && r.data ? r.data : r);
-              return d || {};
+              var d = (r && r.data_1) ? r.data_1 : (r && r.data !== undefined ? r.data : r);
+              return JSON.stringify(d || {});
             });
         }
         """
-        guard let dict = await jsCall(body) as? [String: Any] else { return [:] }
+        guard let str = await jsCall(body) as? String,
+              let dj = str.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: dj) as? [String: Any] else {
+            return [:]
+        }
         var out: [String: String] = [:]
         for (k, v) in dict {
             if let s = v as? String { out[k] = s }
@@ -356,36 +360,48 @@ final class CpeBridge: NSObject, ObservableObject {
     }
 
     func multipost(method: String, data: [String: Any]) async -> [[String: Any]] {
-        guard ready else { return [] }
         let dj = (try? JSONSerialization.data(withJSONObject: data)) ?? Data("{}".utf8)
         let ds = String(data: dj, encoding: .utf8) ?? "{}"
-
         let body = """
         function(){
           return $multipost('\(jsEscape(method))', \(ds))
             .then(function(r){
-              var d = (r && r.data_1) ? r.data_1 : r;
-              if (d && d.data) return d.data;
-              if (Array.isArray(d)) return d;
-              return [];
+              var d = (r && r.data_1) ? r.data_1 : (r && r.data !== undefined ? r.data : r);
+              if (d && d.data) return JSON.stringify(d.data);
+              if (Array.isArray(d)) return JSON.stringify(d);
+              return '[]';
             });
         }
         """
-        guard let arr = await jsCall(body) as? [[String: Any]] else { return [] }
+        guard let str = await jsCall(body) as? String,
+              let d = str.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: d) as? [[String: Any]] else {
+            return []
+        }
         return arr
     }
 
     /// 通用 POST（返回 {"data":[...]} 结构）
+    /// 注意：让 JS 返回 JSON 字符串再在 Swift 解析，
+    /// 直接返回对象时嵌套的 NSNumber/数组在桥接中容易丢失
     func post(_ method: String, _ dataObj: [String: Any]) async -> [String: Any] {
         let dj = (try? JSONSerialization.data(withJSONObject: dataObj)) ?? Data("{}".utf8)
         let ds = String(data: dj, encoding: .utf8) ?? "{}"
         let body = """
         function(){
           return $post('\(jsEscape(method))', \(ds))
-            .then(function(r){ return (r && r.data) ? r.data : (r || {}); });
+            .then(function(r){
+              var v = (r && r.data !== undefined) ? r.data : (r || {});
+              return JSON.stringify(v);
+            });
         }
         """
-        return (await jsCall(body) as? [String: Any]) ?? [:]
+        guard let str = await jsCall(body) as? String,
+              let d = str.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
+            return [:]
+        }
+        return obj
     }
 
     func setSingle(url: String, value: String) async -> Bool {
