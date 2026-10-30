@@ -26,8 +26,10 @@ final class CpeNativeAPI {
 
     private init() {
         let cfg = URLSessionConfiguration.ephemeral
-        cfg.timeoutIntervalForRequest = 15
-        cfg.timeoutIntervalForResource = 25
+        cfg.timeoutIntervalForRequest = 8      // 本地 CPE 响应很快，超时缩短可快速发现僵死连接
+        cfg.timeoutIntervalForResource = 12
+        cfg.waitsForConnectivity = false       // 不要无限等待，否则挂机时会卡住
+        cfg.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         cfg.httpShouldSetCookies = true
         cfg.httpCookieAcceptPolicy = .always
         cfg.httpCookieStorage = HTTPCookieStorage.shared
