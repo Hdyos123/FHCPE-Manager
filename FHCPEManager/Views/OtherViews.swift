@@ -359,6 +359,14 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
                 }
 
+                Section("诊断") {
+                    NavigationLink {
+                        DiagView()
+                    } label: {
+                        Label("连接诊断", systemImage: "stethoscope")
+                    }
+                }
+
                 Section {
                     Button("退出登录", role: .destructive) {
                         Settings.clearPassword()
@@ -433,3 +441,85 @@ struct ConnEditor: View {
 
 
 
+
+
+// MARK: - 连接诊断
+
+struct DiagView: View {
+    @EnvironmentObject var store: CpeStore
+    @State private var lines: [String] = []
+    @State private var running = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    if running {
+                        ProgressView("检测中…").padding()
+                    }
+                    ForEach(Array(lines.enumerated()), id: \.offset) { _, l in
+                        Text(l)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(l.hasPrefix("✗") ? .red : .primary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(14)
+            }
+            .navigationTitle("连接诊断")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("开始") { Task { await run() } }
+                        .disabled(running)
+                }
+            }
+            .task { await run() }
+        }
+    }
+
+    private func run() async {
+        running = true
+        lines = []
+        let cfg = Settings.load()
+        lines.append("地址: \(cfg.host)")
+        lines.append("账号: \(cfg.user)")
+        lines.append("密码: \(cfg.password.isEmpty ? "未保存" : "已保存")")
+        lines.append("")
+
+        // 1. 原生 API 登录
+        CpeNativeAPI.shared.configure(host: cfg.host, user: cfg.user, pass: cfg.password)
+        do {
+            try await CpeNativeAPI.shared.login()
+            lines.append("✓ 原生登录成功")
+        } catch {
+            let m = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            lines.append("✗ 原生登录失败: \(m)")
+        }
+
+        // 2. 取数据
+        do {
+            let v = try await CpeNativeAPI.shared.values(CpeNode.overview)
+            lines.append(v.isEmpty ? "✗ 原生取值返回空" : "✓ 原生取值 \(v.count) 项")
+            if let rsrp = v["rsrp"] {
+                lines.append("  信号 RSRP: \(rsrp)")
+            }
+            if let model = v["model"] {
+                lines.append("  型号: \(model)")
+            }
+        } catch {
+            lines.append("✗ 原生取值异常: \(error.localizedDescription)")
+        }
+
+        // 3. WebView 状态
+        lines.append("")
+        lines.append("WebView ready: \(CpeBridge.shared.ready ? "是" : "否")")
+        if let e = CpeBridge.shared.lastError, !e.isEmpty {
+            lines.append("WebView 错误: \(e)")
+        }
+        if !store.diagLog.isEmpty {
+            lines.append("登录日志: \(store.diagLog)")
+        }
+
+        running = false
+    }
+}
