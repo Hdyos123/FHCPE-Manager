@@ -25,6 +25,23 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Set version from tag
+        run: |
+          # 从 tag 或 MANUAL_VERSION 读取版本号，默认 1.0.9
+          VER="${{ github.ref_name }}"
+          if [[ "$VER" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            VER="${BASH_REMATCH[1]}"
+          else
+            VER="1.0.9"
+          fi
+          BUILD=$(date +%m%d%H)
+          echo "version=$VER build=$BUILD"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VER" FHCPEManager/Resources/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" FHCPEManager/Resources/Info.plist
+          sed -i '' "s/MARKETING_VERSION: .*/MARKETING_VERSION: \"$VER\"/" project.yml
+          sed -i '' "s/CURRENT_PROJECT_VERSION: .*/CURRENT_PROJECT_VERSION: $BUILD/" project.yml
+          grep -A1 CFBundleShortVersionString FHCPEManager/Resources/Info.plist
+
       - name: Generate Xcode project
         run: |
           xcodegen generate
