@@ -7,7 +7,7 @@ struct WideAdapter<Content: View>: View {
     let maxWidth: CGFloat
     @ViewBuilder var content: () -> Content
 
-    init(maxWidth: CGFloat = 720, @ViewBuilder content: @escaping () -> Content) {
+    init(maxWidth: CGFloat = 560, @ViewBuilder content: @escaping () -> Content) {
         self.maxWidth = maxWidth
         self.content = content
     }
