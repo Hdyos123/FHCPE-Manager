@@ -267,6 +267,21 @@ final class CpeNativeAPI {
         return []
     }
 
+    /// 通用 POST（get_xml_childnode_value 等，返回结构为 {"data":[...]}）
+    func post(_ method: String, _ dataObj: [String: Any]) async throws -> [String: Any] {
+        try await refreshSession()
+        let inner: [String: Any] = [
+            "ajaxmethod": method,
+            "dataObj": dataObj,
+            "sessionid": sid
+        ]
+        guard let pd = try? JSONSerialization.data(withJSONObject: inner),
+              let ps = String(data: pd, encoding: .utf8),
+              let payload = encrypt(ps) else { throw NError.crypto }
+        let r = try await request("/api/tmp/FHAPIS?_\(rnd())", body: payload)
+        return decode(r)
+    }
+
     func setSingle(url: String, value: String) async throws {
         try await refreshSession()
         let inner: [String: Any] = [
