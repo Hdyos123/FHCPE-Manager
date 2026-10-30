@@ -48,10 +48,12 @@ struct HomeView: View {
                     .environmentObject(store)
                     .presentationDetents(isWide ? [.large] : [.medium, .large])
                     .presentationDragIndicator(.visible)
+                    .presentationBackground(.clear)
             }
             .sheet(isPresented: $showModel) {
                 ModelSheet(status: s)
                     .presentationDetents(isWide ? [.large] : [.medium])
+                    .presentationBackground(.clear)
             }
             .sheet(isPresented: $showControl) {
                 ControlView().environmentObject(store)
@@ -71,6 +73,7 @@ struct HomeView: View {
                               deviceUp: mbpsFromKbps(s["ulmax"]))
                     .environmentObject(store)
                     .presentationDetents([.height(340)])
+                    .presentationBackground(.clear)
             }
         }
     }
@@ -169,19 +172,20 @@ struct HomeView: View {
 
                 // 右：2×2 功能键 + 设备卡（网格均分，四个按钮完全等大）
                 VStack(spacing: 8) {
-                    Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+                    Grid(horizontalSpacing: 7, verticalSpacing: 7) {
                         GridRow {
-                            iconBtn("arrow.clockwise") {
+                            iconBtn("arrow.clockwise", "刷新") {
                                 Task { await store.fetchAll() }
+                                store.toast("正在刷新…", kind: .info)
                             }
-                            iconBtn("slider.horizontal.3") { showControl = true }
+                            iconBtn("slider.horizontal.3", "控制") { showControl = true }
                         }
                         GridRow {
-                            iconBtn("lock.fill") { showLock = true }
-                            iconBtn("doc.text") { showParam = true }
+                            iconBtn("lock.fill", "锁频") { showLock = true }
+                            iconBtn("doc.text", "参数") { showParam = true }
                         }
                     }
-                    .frame(width: 84)
+                    .frame(width: 92)
 
                     Button {
                         showDevices = true
@@ -385,7 +389,7 @@ struct HomeView: View {
 
             Text(String(format: "%.2f MB/s", mbs))
                 .font(.system(size: 10))
-                .foregroundStyle(Color(white: 0.55))
+                .foregroundStyle(tier.color.opacity(0.72))   // 与 Mbps 同色系
                 .frame(height: 14)
 
             if mbps > 0 {
@@ -737,18 +741,20 @@ struct HomeView: View {
 
     /// 设备只提供 TodayTotalBytes，无分方向字段
     /// 用本月上下行比例拆分今日合计（近似值）
+    /// 今日下行：按本月上下行比例拆分今日合计，统一走 bytes() 保证两位小数
     private var todayRx: String {
         let total = s.double("todayTotal")
         let mRx = s.double("monthRx"), mTx = s.double("monthTx")
         guard total > 0, mRx + mTx > 0 else { return "--" }
-        return bytes(String(Int(total * mRx / (mRx + mTx))))
+        return bytes(String(format: "%.0f", total * mRx / (mRx + mTx)))
     }
 
+    /// 今日上行：同上，保证与下行同样精度
     private var todayTx: String {
         let total = s.double("todayTotal")
         let mRx = s.double("monthRx"), mTx = s.double("monthTx")
         guard total > 0, mRx + mTx > 0 else { return "--" }
-        return bytes(String(Int(total * mTx / (mRx + mTx))))
+        return bytes(String(format: "%.0f", total * mTx / (mRx + mTx)))
     }
 
     private func bytes(_ v: String) -> String {
@@ -756,7 +762,8 @@ struct HomeView: View {
         let units = ["B", "KB", "MB", "GB", "TB"]
         var val = n, i = 0
         while val >= 1024 && i < units.count - 1 { val /= 1024; i += 1 }
-        return String(format: val >= 100 ? "%.0f %@" : "%.2f %@", val, units[i])
+        // 统一两位小数，与「70.88 GB」一致
+        return String(format: "%.2f %@", val, units[i])
     }
 
     private func legend(_ label: String, _ v: String, _ c: Color) -> some View {
