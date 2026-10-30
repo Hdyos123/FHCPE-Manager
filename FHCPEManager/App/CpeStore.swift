@@ -21,6 +21,7 @@ final class CpeStore: ObservableObject {
     private let bridge = CpeBridge.shared
     private var pollTask: Task<Void, Never>?
     private var useNative = false
+    @Published var diagLog = ""
 
     init() {
         let saved = UserDefaults.standard.double(forKey: "cpe.rateMs")
@@ -34,20 +35,31 @@ final class CpeStore: ObservableObject {
         isLoading = true
         defer { isLoading = false }
 
-        // 优先 WebView 桥接
+        // ① 优先 WebView 桥接；登录后必须能真正取到数据才算成功
         let bridgeOK = await bridge.login(host: host, user: user, password: password)
         if bridgeOK {
-            useNative = false
-            Settings(host: host, user: user, password: password).save()
-            isLoggedIn = true
-            await fetchAll()
-            return true
+            let probe = await bridge.fetchValues(CpeNode.overview)
+            if !probe.isEmpty {
+                useNative = false
+                Settings(host: host, user: user, password: password).save()
+                isLoggedIn = true
+                await fetchAll()
+                return true
+            }
+            diagLog = "WebView 登录成功但取不到数据"
+        } else {
+            diagLog = "WebView: " + (bridge.lastError ?? "未知")
         }
 
-        // 兜底：纯原生 URLSession + CommonCrypto
+        // ② 兜底：纯原生 URLSession + CommonCrypto
         CpeNativeAPI.shared.configure(host: host, user: user, pass: password)
         do {
             try await CpeNativeAPI.shared.login()
+            let probe = try await CpeNativeAPI.shared.values(CpeNode.overview)
+            if probe.isEmpty {
+                errorText = "登录成功但设备未返回数据\n" + diagLog
+                return false
+            }
             useNative = true
             Settings(host: host, user: user, password: password).save()
             isLoggedIn = true
@@ -55,8 +67,7 @@ final class CpeStore: ObservableObject {
             return true
         } catch {
             let nativeMsg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            let bridgeMsg = bridge.lastError ?? ""
-            errorText = "WebView: \(bridgeMsg)\n原生: \(nativeMsg)"
+            errorText = "WebView: \(bridge.lastError ?? "-")\n原生: \(nativeMsg)"
             return false
         }
     }
@@ -66,13 +77,21 @@ final class CpeStore: ObservableObject {
         guard s.isConfigured else { return }
         let ok = await bridge.login(host: s.host, user: s.user, password: s.password)
         if ok {
-            useNative = false
-            isLoggedIn = true
-            await fetchAll()
-            return
+            let probe = await bridge.fetchValues(CpeNode.overview)
+            if !probe.isEmpty {
+                useNative = false
+                isLoggedIn = true
+                await fetchAll()
+                return
+            }
         }
         CpeNativeAPI.shared.configure(host: s.host, user: s.user, pass: s.password)
-        if (try? await CpeNativeAPI.shared.login()) != nil {
+        if let probe = try? await CpeNativeAPI.shared.values(CpeNode.overview),
+           (try? await CpeNativeAPI.shared.login()) != nil, !probe.isEmpty {
+            useNative = true
+            isLoggedIn = true
+            await fetchAll()
+        } else if (try? await CpeNativeAPI.shared.login()) != nil {
             useNative = true
             isLoggedIn = true
             await fetchAll()
