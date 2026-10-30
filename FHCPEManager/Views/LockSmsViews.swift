@@ -21,7 +21,7 @@ struct LockBandView: View {
 
     var body: some View {
         NavigationStack {
-            WideAdapter(maxWidth: 760) {
+            WideAdapter(maxWidth: 560) {
             List {
                 Section {
                     HStack {
@@ -213,7 +213,7 @@ struct SmsView: View {
 
     var body: some View {
         NavigationStack {
-            WideAdapter(maxWidth: 760) {
+            WideAdapter(maxWidth: 560) {
             Group {
                 if loading && list.isEmpty {
                     ProgressView("读取中…").frame(maxWidth: .infinity, maxHeight: .infinity)
