@@ -114,6 +114,7 @@ struct LockBandView: View {
                     Text("联通 46001 · 移动 46000 · 电信 46011")
                 }
             }
+            .glassListStyle()
             .navigationTitle("锁频")
             }
             .task { loadCurrent() }
@@ -238,6 +239,7 @@ struct SmsView: View {
                     .refreshable { await load() }
                 }
             }
+            .glassListStyle()
             .navigationTitle("短信")
             }
             .toolbar {
