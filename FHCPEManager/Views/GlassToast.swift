@@ -34,7 +34,7 @@ struct GlassToast: View {
 
             Text(text)
                 .font(.system(size: 13.5, weight: .medium))
-                .foregroundStyle(Color(white: 0.18))
+                .foregroundStyle(.primary)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
 
