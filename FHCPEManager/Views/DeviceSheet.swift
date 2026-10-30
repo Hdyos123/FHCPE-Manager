@@ -47,6 +47,7 @@ struct DeviceSheet: View {
                                     .fill(Color.secondary.opacity(0.1)))
                         }
                         .buttonStyle(.plain)
+                        .haptic()
                         .disabled(h.idx.isEmpty)
                     }
                     .padding(.vertical, 3)
@@ -66,7 +67,10 @@ struct DeviceSheet: View {
             }
             .alert("确认修改", isPresented: $showConfirm) {
                 Button("取消", role: .cancel) { }
-                Button("保存") { commitEdit() }
+                Button("保存") {
+                    Haptic.medium()
+                    commitEdit()
+                }
             } message: {
                 Text(confirmText)
             }
@@ -174,6 +178,7 @@ struct DeviceSheet: View {
                                           down: editDown.isEmpty ? "0" : editDown,
                                           up: editUp.isEmpty ? "0" : editUp)
             }
+            store.toast("设备设置已保存", kind: .success)
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             await store.fetchHosts()
             editing = nil
