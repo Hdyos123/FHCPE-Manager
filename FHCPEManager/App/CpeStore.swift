@@ -63,11 +63,18 @@ final class CpeStore: ObservableObject {
     func reloginIfNeeded() async {
         let cfg = Settings.load()
         guard !cfg.password.isEmpty else { return }
-        let ok = await login(host: cfg.host, user: cfg.user, password: cfg.password)
-        if !ok {
-            // 重登也失败，提示用户
-            toast("连接已断开，请检查网络", kind: .error)
+
+        // 重试 3 次（间隔 1.5s），避免瞬时抖动就弹出错误提示
+        for attempt in 1...3 {
+            let ok = await login(host: cfg.host, user: cfg.user, password: cfg.password)
+            if ok { return }
+            if attempt < 3 {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+            }
         }
+
+        // 三次都失败才提示，且用温和措辞
+        toast("暂时连不上设备，稍后自动重试", kind: .info)
     }
 
     private var useNative = false
@@ -112,7 +119,17 @@ final class CpeStore: ObservableObject {
         CpeNativeAPI.shared.configure(host: host, user: user, pass: password)
         do {
             try await CpeNativeAPI.shared.login()
-            let probe = try await CpeNativeAPI.shared.values(CpeNode.overview)
+
+            // 登录已成功，等网络稳定后取数据（最多重试 4 次）
+            var probe: [String: String] = [:]
+            for attempt in 1...4 {
+                probe = (try? await CpeNativeAPI.shared.values(CpeNode.overview)) ?? [:]
+                if !probe.isEmpty { break }
+                if attempt < 4 {
+                    try? await Task.sleep(nanoseconds: 800_000_000)
+                }
+            }
+
             if !probe.isEmpty {
                 useNative = true
                 Settings(host: host, user: user, password: password).save()
@@ -120,7 +137,11 @@ final class CpeStore: ObservableObject {
                 await fetchAll()
                 return true
             }
+
+            // 登录成功但取不到数据：不算密码错误，提示网络问题
             diagLog = "原生登录成功但取不到数据"
+            errorText = "登录成功但读不到数据，请确认已连接 CPE 的 Wi-Fi"
+            return false
         } catch {
             let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             // 凭据错误 / 锁定：直接返回，不再尝试其它路径
