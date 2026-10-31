@@ -89,16 +89,36 @@ final class OppoBridge: NSObject, ObservableObject {
         }
 
         trace.removeAll()
-        log("开始加载 \(host)")
+        pageLoaded = false
+        loginToken += 1
+        let myToken = loginToken
+        log("开始加载 \(host)（会话 #\(myToken)）")
 
         var req = URLRequest(url: url)
         req.timeoutInterval = 30
         req.cachePolicy = .reloadIgnoringLocalCacheData
         wv.load(req)
 
-        // 不依赖 didFinish（OPPO 是 SPA，加载慢），直接轮询等待输入框
-        for i in 0..<60 {   // 最多 30 秒
+        // 不依赖 didFinish（OPPO 是 SPA，加载慢），主动轮询等待输入框
+        // 注意：jsCall 在页面未就绪时可能返回 nil，必须记录否则看不出问题
+        let t0 = Date()
+
+        // 阶段一：等 didFinish（最多 20 秒）
+        var waited = 0.0
+        while !pageLoaded && waited < 20 {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if loginToken != myToken { log("被新登录中断"); return false }
+            waited += 0.3
+        }
+        log(pageLoaded ? "didFinish \(Int(waited))s" : "✗ didFinish 超时 20s")
+
+        // 阶段二：轮询探测输入框（最多 15 秒）
+        var lastReport = -1
+        for _ in 0..<30 {
             try? await Task.sleep(nanoseconds: 500_000_000)
+            if loginToken != myToken { log("被新登录中断"); return false }
+            let elapsed = Int(Date().timeIntervalSince(t0))
+
             let st = await jsCall("""
             function(){
               return JSON.stringify({
@@ -109,18 +129,32 @@ final class OppoBridge: NSObject, ObservableObject {
               });
             }
             """)
-            guard let str = st as? String,
-                  let d = str.data(using: .utf8),
-                  let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
-                if i % 6 == 0 { log("等待页面… \(i/2)s") }
+
+            guard let str = st as? String else {
+                // 关键：nil 说明 evaluateJavaScript 失败（页面还在加载或已崩溃）
+                if elapsed / 5 != lastReport {
+                    lastReport = elapsed / 5
+                    log("\(elapsed)s: 页面无响应")
+                }
                 continue
             }
-            let inputs = o["inputs"] as? Int ?? 0
-            if i % 6 == 0 {
-                log("\(i/2)s: inputs=\(inputs) hash=\(o["hash"] ?? "?") body=\(o["body"] ?? 0)")
+            guard let d = str.data(using: .utf8),
+                  let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
+                if elapsed / 5 != lastReport {
+                    lastReport = elapsed / 5
+                    log("\(elapsed)s: 解析失败")
+                }
+                continue
             }
+
+            let inputs = o["inputs"] as? Int ?? 0
+            if elapsed / 5 != lastReport {
+                lastReport = elapsed / 5
+                log("\(elapsed)s: inputs=\(inputs) hash=\(o["hash"] ?? "?") body=\(o["body"] ?? 0)")
+            }
+
             if inputs >= 2 {
-                log("页面就绪 (\(i/2)s)")
+                log("页面就绪 (\(elapsed)s)")
                 return await doLogin()
             }
         }
@@ -132,6 +166,10 @@ final class OppoBridge: NSObject, ObservableObject {
 
     /// 诊断日志
     private(set) var trace: [String] = []
+    /// 页面是否已加载完成（didFinish 触发）
+    private var pageLoaded = false
+    /// 登录会话令牌：新登录会让旧的轮询循环自行退出
+    private var loginToken = 0
     private func log(_ s: String) {
         trace.append(s)
         if trace.count > 30 { trace.removeFirst() }
@@ -321,7 +359,7 @@ final class OppoBridge: NSObject, ObservableObject {
                 }
             }
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
                 if let cb = self?.callbacks.removeValue(forKey: cid) { cb(nil) }
             }
         }
@@ -358,8 +396,8 @@ extension OppoBridge: WKScriptMessageHandler {
 
 extension OppoBridge: WKNavigationDelegate {
     nonisolated func webView(_ wv: WKWebView, didFinish nav: WKNavigation!) {
-        // 登录流程由 login() 里的轮询驱动，这里只记录日志
         Task { @MainActor in
+            self.pageLoaded = true
             self.log("didFinish: \(wv.url?.absoluteString ?? "?")")
         }
     }
