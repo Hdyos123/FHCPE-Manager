@@ -356,7 +356,7 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(store.isLoggedIn ? "已连接" : "未连接")
                                 .font(.system(size: 15, weight: .semibold))
-                            Text(Settings.load().host + " · " + Settings.load().user)
+                            Text(connSubtitle)
                                 .font(.system(size: 12)).foregroundStyle(.secondary)
                         }
                         Spacer()
@@ -467,6 +467,16 @@ struct SettingsView: View {
             }
             .onAppear { applyAppearance(theme) }
         }
+    }
+
+    /// 当前连接的设备信息
+    /// 连接信息：按厂商分开取
+    private var connSubtitle: String {
+        if let p = store.activeProfile, p.vendor == .oppo {
+            return p.host + " · " + p.user          // OPPO：用档案
+        }
+        let cfg = Settings.load()                    // 烽火：保持原逻辑
+        return cfg.host + " · " + cfg.user
     }
 
     private var appVersion: String {
