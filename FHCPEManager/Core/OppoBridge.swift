@@ -158,7 +158,8 @@ final class OppoBridge: NSObject, ObservableObject {
     func fetchDashboard() async -> [String: String] {
         guard ready else { return [:] }
 
-        // 只在 JS 侧取一次 innerText，然后就地提取需要的行，减少跨进程传输
+        // 只在 JS 侧取一次 innerText，就地提取需要的行，减少跨进程传输
+        // 分隔符用 ||| 和 ###，避免 Swift 字符串转义冲突
         let body = """
         function(){
           var t = document.body.innerText;
@@ -175,28 +176,26 @@ final class OppoBridge: NSObject, ObservableObject {
           for (var i = 0; i < lines.length; i++) {
             var l = lines[i].trim();
             if (want[l] && i + 1 < lines.length) {
-              out.push(l + '\u0001' + lines[i+1].trim());
+              out.push(l + '###' + lines[i+1].trim());
             }
           }
-          // 设备总数
           var m = t.match(/total of (\d+) devices?/);
-          if (m) out.push('_deviceCount\u0001' + m[1]);
-          return out.join('\u0002');
+          if (m) out.push('_deviceCount###' + m[1]);
+          return out.join('|||');
         }
         """
         let raw = (await jsCall(body) as? String) ?? ""
         guard !raw.isEmpty else { return [:] }
 
-        // 解析成字典（ 分隔条目， 分隔键值）
+        // 解析成字典
         var d: [String: String] = [:]
-        for pair in raw.components(separatedBy: "\u{0002}") {
-            let kv = pair.components(separatedBy: "\u{0001}")
+        for pair in raw.components(separatedBy: "|||") {
+            let kv = pair.components(separatedBy: "###")
             guard kv.count == 2 else { continue }
             d[kv[0]] = kv[1]
         }
         if let n = d["_deviceCount"] { d["deviceCount"] = n }
 
-        // 复用原有的映射逻辑
         return OppoParser.parseFromPairs(d)
     }
 
