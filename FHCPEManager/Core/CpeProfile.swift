@@ -129,6 +129,55 @@ enum ProfileStore {
         saveAll(list)
     }
 
+    /// OPPO 专用：按「地址」去重后保存
+    /// （OPPO 每次登录生成新 UUID，必须单独处理）
+    static func upsertOppo(_ profile: CpeProfile) {
+        var list = loadAll()
+
+        // 找同地址的 OPPO 档案
+        if let i = list.firstIndex(where: {
+            $0.vendor == .oppo && $0.host == profile.host
+        }) {
+            var updated = profile
+            updated.id = list[i].id                 // 复用原 id
+            if !list[i].name.isEmpty { updated.name = list[i].name }
+            list[i] = updated
+            saveAll(list)
+            return
+        }
+
+        list.append(profile)
+        saveAll(list)
+    }
+
+    /// 清理重复记录（只处理 OPPO，烽火档案不受影响）
+    static func dedupe() {
+        var list = loadAll().filter { $0.vendor == .oppo }
+        guard !list.isEmpty else { return }
+        var seen: [String: CpeProfile] = [:]
+        var result: [CpeProfile] = []
+        for p in list {
+            let key = p.vendor.rawValue + "|" + p.host
+            if let existing = seen[key] {
+                // 保留有密码的那条
+                if existing.password.isEmpty && !p.password.isEmpty {
+                    if let i = result.firstIndex(where: { $0.id == existing.id }) {
+                        result[i] = p
+                        seen[key] = p
+                    }
+                }
+            } else {
+                seen[key] = p
+                result.append(p)
+            }
+        }
+        if result.count != list.count {
+            // 保留烽火档案，只替换 OPPO 部分
+            let others = loadAll().filter { $0.vendor != .oppo }
+            saveAll(others + result)
+        }
+    }
+
     static func delete(_ profile: CpeProfile) {
         var list = loadAll()
         list.removeAll { $0.id == profile.id }
