@@ -20,7 +20,6 @@ final class OppoBridge: NSObject, ObservableObject {
 
     private var callbacks: [String: (Any?) -> Void] = [:]
     private var seq = 0
-    private var pendingLogin: CheckedContinuation<Bool, Never>?
 
     private override init() { super.init() }
 
@@ -84,24 +83,51 @@ final class OppoBridge: NSObject, ObservableObject {
             lastError = "WebView 未初始化"
             return false
         }
-        guard let url = URL(string: "http://\(host)/#/login") else {
+        guard let url = URL(string: "http://\(host)/") else {
             lastError = "地址无效"
             return false
         }
 
-        return await withCheckedContinuation { cont in
-            pendingLogin = cont
-            var req = URLRequest(url: url)
-            req.timeoutInterval = 15
-            wv.load(req)
+        trace.removeAll()
+        log("开始加载 \(host)")
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 45) { [weak self] in
-                guard let self, let p = self.pendingLogin else { return }
-                self.pendingLogin = nil
-                self.lastError = "连接超时（45s），请确认已连接 OPPO CPE 的 Wi-Fi"
-                p.resume(returning: false)
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 30
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        wv.load(req)
+
+        // 不依赖 didFinish（OPPO 是 SPA，加载慢），直接轮询等待输入框
+        for i in 0..<60 {   // 最多 30 秒
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            let st = await jsCall("""
+            function(){
+              return JSON.stringify({
+                inputs: document.querySelectorAll('input').length,
+                hash: location.hash,
+                ready: document.readyState,
+                body: (document.body ? document.body.innerHTML.length : 0)
+              });
+            }
+            """)
+            guard let str = st as? String,
+                  let d = str.data(using: .utf8),
+                  let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
+                if i % 6 == 0 { log("等待页面… \(i/2)s") }
+                continue
+            }
+            let inputs = o["inputs"] as? Int ?? 0
+            if i % 6 == 0 {
+                log("\(i/2)s: inputs=\(inputs) hash=\(o["hash"] ?? "?") body=\(o["body"] ?? 0)")
+            }
+            if inputs >= 2 {
+                log("页面就绪 (\(i/2)s)")
+                return await doLogin()
             }
         }
+
+        lastError = "页面加载超时，请确认连的是 OPPO CPE 的 Wi-Fi"
+        log("✗ 30 秒内未渲染出登录框")
+        return false
     }
 
     /// 诊断日志
@@ -117,14 +143,36 @@ final class OppoBridge: NSObject, ObservableObject {
 
         // 等 Vue 渲染出输入框
         var inputReady = false
+        var lastState = ""
         for i in 0..<15 {
-            let ok = await jsCall("function(){ return document.querySelectorAll('input').length >= 2; }")
-            if (ok as? Bool) == true { inputReady = true; log("输入框就绪 (\(i*400)ms)"); break }
+            let st = await jsCall("""
+            function(){
+              return JSON.stringify({
+                inputs: document.querySelectorAll('input').length,
+                hash: location.hash,
+                ready: document.readyState,
+                bodyLen: (document.body ? document.body.innerHTML.length : 0),
+                hasBridge: typeof window.__oppoCall
+              });
+            }
+            """)
+            lastState = (st as? String) ?? "(nil)"
+            if let str = st as? String,
+               let d = str.data(using: .utf8),
+               let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+               let n = o["inputs"] as? Int, n >= 2 {
+                inputReady = true
+                log("输入框就绪 (\(i * 400)ms)")
+                break
+            }
+            if i == 0 || i == 5 || i == 14 {
+                log("探测\(i): \(lastState)")
+            }
             try? await Task.sleep(nanoseconds: 400_000_000)
         }
         if !inputReady {
-            log("✗ 15 次探测仍未找到输入框")
-            lastError = "页面未渲染登录框，请重试"
+            log("✗ 最终状态: \(lastState)")
+            lastError = "页面未渲染登录框（\(lastState)）"
             return false
         }
 
@@ -264,7 +312,14 @@ final class OppoBridge: NSObject, ObservableObject {
         return await withCheckedContinuation { (cont: CheckedContinuation<Any?, Never>) in
             callbacks[cid] = { cont.resume(returning: $0) }
             let wrapped = "window.__oppoCall(\(quote(cid)), \(quote(fn)));"
-            wv.evaluateJavaScript(wrapped) { _, _ in }
+            wv.evaluateJavaScript(wrapped) { _, err in
+                if let err = err {
+                    Task { @MainActor in
+                        self.log("jsCall 错误: \(err.localizedDescription)")
+                        if let cb = self.callbacks.removeValue(forKey: cid) { cb(nil) }
+                    }
+                }
+            }
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
                 if let cb = self?.callbacks.removeValue(forKey: cid) { cb(nil) }
@@ -303,12 +358,9 @@ extension OppoBridge: WKScriptMessageHandler {
 
 extension OppoBridge: WKNavigationDelegate {
     nonisolated func webView(_ wv: WKWebView, didFinish nav: WKNavigation!) {
+        // 登录流程由 login() 里的轮询驱动，这里只记录日志
         Task { @MainActor in
             self.log("didFinish: \(wv.url?.absoluteString ?? "?")")
-            guard self.pendingLogin != nil else { return }
-            let ok = await self.doLogin()
-            self.pendingLogin?.resume(returning: ok)
-            self.pendingLogin = nil
         }
     }
 
@@ -321,8 +373,5 @@ extension OppoBridge: WKNavigationDelegate {
 
     private func fail(_ e: Error) {
         log("✗ 加载失败: \(e.localizedDescription)")
-        lastError = "无法连接设备：" + e.localizedDescription
-        pendingLogin?.resume(returning: false)
-        pendingLogin = nil
     }
 }
