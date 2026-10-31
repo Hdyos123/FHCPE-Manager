@@ -40,6 +40,14 @@ enum CpeVendor: String, CaseIterable, Codable {
         }
     }
 
+    /// 品牌图标资源名（Assets.xcassets）
+    var logoAsset: String {
+        switch self {
+        case .fiberhome: return "BrandFiberHome"
+        case .oppo:      return "BrandOPPO"
+        }
+    }
+
     /// 数据来源：烽火走原生 API，OPPO 走 WebView 桥接
     var usesWebView: Bool {
         switch self {
