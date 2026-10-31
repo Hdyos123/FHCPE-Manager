@@ -119,27 +119,22 @@ enum ProfileStore {
         }
     }
 
+    /// 保存档案：按「厂商 + 地址」去重，同一台设备只保留一条
     static func upsert(_ profile: CpeProfile) {
         var list = loadAll()
+
         if let i = list.firstIndex(where: { $0.id == profile.id }) {
             list[i] = profile
-        } else {
-            list.append(profile)
+            saveAll(list)
+            return
         }
-        saveAll(list)
-    }
 
-    /// OPPO 专用：按「地址」去重后保存
-    /// （OPPO 每次登录生成新 UUID，必须单独处理）
-    static func upsertOppo(_ profile: CpeProfile) {
-        var list = loadAll()
-
-        // 找同地址的 OPPO 档案
+        // 同厂商 + 同地址 → 视为同一台设备
         if let i = list.firstIndex(where: {
-            $0.vendor == .oppo && $0.host == profile.host
+            $0.vendor == profile.vendor && $0.host == profile.host
         }) {
             var updated = profile
-            updated.id = list[i].id                 // 复用原 id
+            updated.id = list[i].id
             if !list[i].name.isEmpty { updated.name = list[i].name }
             list[i] = updated
             saveAll(list)
@@ -150,9 +145,15 @@ enum ProfileStore {
         saveAll(list)
     }
 
-    /// 清理重复记录（只处理 OPPO，烽火档案不受影响）
+    /// 兼容旧调用：等同 upsert
+    static func upsertOppo(_ profile: CpeProfile) {
+        upsert(profile)
+    }
+
+    /// 清理重复档案（同厂商+地址只保留一条）
     static func dedupe() {
-        var list = loadAll().filter { $0.vendor == .oppo }
+        let all = loadAll()
+        var list = all
         guard !list.isEmpty else { return }
         var seen: [String: CpeProfile] = [:]
         var result: [CpeProfile] = []
@@ -172,9 +173,7 @@ enum ProfileStore {
             }
         }
         if result.count != list.count {
-            // 保留烽火档案，只替换 OPPO 部分
-            let others = loadAll().filter { $0.vendor != .oppo }
-            saveAll(others + result)
+            saveAll(result)
         }
     }
 
