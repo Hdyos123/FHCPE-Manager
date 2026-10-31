@@ -105,14 +105,21 @@ struct LoginView: View {
                     showVendorPicker = true
                 } label: {
                     HStack(spacing: 12) {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(Color.blue.opacity(0.15))
-                            .frame(width: 40, height: 40)
-                            .overlay(
-                                Image(systemName: vendor?.icon ?? "cube.box")
-                                    .font(.system(size: 17, weight: .medium))
-                                    .foregroundStyle(.blue)
-                            )
+                        Group {
+                            if let v = vendor {
+                                Image(v.logoAsset).resizable().scaledToFit()
+                            } else {
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(Color.blue.opacity(0.15))
+                                    .overlay(
+                                        Image(systemName: "cube.box")
+                                            .font(.system(size: 17, weight: .medium))
+                                            .foregroundStyle(.blue)
+                                    )
+                            }
+                        }
+                        .frame(width: 40, height: 40)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         VStack(alignment: .leading, spacing: 2) {
                             Text(vendor?.displayName ?? "选择设备厂商")
                                 .font(.system(size: 16, weight: .medium))
@@ -449,14 +456,11 @@ struct VendorPicker: View {
                         dismiss()
                     } label: {
                         HStack(spacing: 12) {
-                            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                .fill(Color.blue.opacity(0.15))
+                            Image(v.logoAsset)
+                                .resizable()
+                                .scaledToFit()
                                 .frame(width: 44, height: 44)
-                                .overlay(
-                                    Image(systemName: v.icon)
-                                        .font(.system(size: 19, weight: .medium))
-                                        .foregroundStyle(.blue)
-                                )
+                                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(v.displayName)
                                     .font(.system(size: 16, weight: .semibold))
