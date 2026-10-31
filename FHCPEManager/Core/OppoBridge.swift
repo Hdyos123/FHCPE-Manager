@@ -30,6 +30,13 @@ final class OppoBridge: NSObject, ObservableObject {
         let cfg = WKWebViewConfiguration()
         cfg.websiteDataStore = .default()
         cfg.defaultWebpagePreferences.allowsContentJavaScript = true
+        // 关键：允许 JS 在不活跃时也执行
+        cfg.suppressesIncrementalRendering = false
+        if #available(iOS 15.0, *) {
+            // 允许页面在后台继续运行脚本
+            cfg.preferences.isElementFullscreenEnabled = false
+        }
+        cfg.processPool = WKProcessPool()
 
         let ucc = WKUserContentController()
         ucc.add(self, name: "oppoBridge")
@@ -58,13 +65,13 @@ final class OppoBridge: NSObject, ObservableObject {
 
         let wv = WKWebView(frame: .zero, configuration: cfg)
         wv.navigationDelegate = self
-        wv.alpha = 0.01
+        wv.alpha = 0.02   // 不能为 0，否则 WebKit 暂停 JS
         wv.isUserInteractionEnabled = false
         view.addSubview(wv)
         wv.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            wv.widthAnchor.constraint(equalToConstant: 1),
-            wv.heightAnchor.constraint(equalToConstant: 1),
+            wv.widthAnchor.constraint(equalToConstant: 2),
+            wv.heightAnchor.constraint(equalToConstant: 2),
             wv.topAnchor.constraint(equalTo: view.topAnchor),
             wv.leadingAnchor.constraint(equalTo: view.leadingAnchor)
         ])
@@ -341,6 +348,27 @@ final class OppoBridge: NSObject, ObservableObject {
     }
 
     // MARK: 底层
+
+    /// 自检：验证 WebView 的 JS 引擎能否执行
+    func selfTest() async -> String {
+        guard let wv = webView else { return "X WebView 未初始化" }
+
+        return await withCheckedContinuation { (c: CheckedContinuation<String, Never>) in
+            var done = false
+            let lock = NSLock()
+            let finish: (String) -> Void = { v in
+                lock.lock(); defer { lock.unlock() }
+                guard !done else { return }
+                done = true
+                c.resume(returning: v)
+            }
+            wv.evaluateJavaScript("1+1") { r, e in
+                if let e = e { finish("X JS 错误: " + e.localizedDescription) }
+                else { finish("OK JS 可用, 结果=" + String(describing: r)) }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { finish("X JS 超时(3s) - 引擎被暂停") }
+        }
+    }
 
     private func jsCall(_ fn: String) async -> Any? {
         guard let wv = webView else { return nil }
