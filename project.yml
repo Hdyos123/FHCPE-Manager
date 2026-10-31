@@ -24,7 +24,7 @@ targets:
           - "Resources/Bridging-Header.h"
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.fiberhome.nb666
+        PRODUCT_BUNDLE_IDENTIFIER: com.cpemanager.ultra
         INFOPLIST_FILE: FHCPEManager/Resources/Info.plist
         SWIFT_OBJC_BRIDGING_HEADER: FHCPEManager/Resources/Bridging-Header.h
         CODE_SIGN_IDENTITY: ""
@@ -32,7 +32,7 @@ targets:
         CODE_SIGNING_ALLOWED: NO
         GENERATE_INFOPLIST_FILE: NO
         CURRENT_PROJECT_VERSION: 114
-        MARKETING_VERSION: "1.1.9"
+        MARKETING_VERSION: "1.2.0"
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SUPPORTS_MACCATALYST: NO
