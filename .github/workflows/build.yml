@@ -19,16 +19,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: |
-          # 列出可用 Xcode，选版本号最大的
-          ls /Applications | grep -i "^Xcode" || true
-          LATEST=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
-          if [ -n "$LATEST" ]; then sudo xcode-select -s "$LATEST"; fi
-          xcodebuild -version
+      - name: Show Xcode
+        run: xcodebuild -version
+
+      - name: Cache Homebrew
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/Homebrew
+            /usr/local/Cellar
+            /opt/homebrew/Cellar
+          key: brew-xcodegen-${{ runner.os }}
 
       - name: Install XcodeGen
-        run: brew install xcodegen
+        run: |
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "xcodegen 已缓存"
+          else
+            brew install xcodegen
+          fi
 
       - name: Resolve version
         id: ver
@@ -84,6 +93,8 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             DEVELOPMENT_TEAM="" \
             -arch arm64 \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            DEBUG_INFORMATION_FORMAT=dwarf \
             build
 
       - name: Package into IPA
