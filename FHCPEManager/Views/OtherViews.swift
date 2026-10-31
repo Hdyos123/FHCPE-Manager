@@ -556,17 +556,32 @@ struct DiagView: View {
     @EnvironmentObject var store: CpeStore
     @State private var lines: [String] = []
     @State private var running = false
-    @State private var host = Settings.load().host
-    @State private var user = Settings.load().user
+    @State private var vendor: CpeVendor = .fiberhome
+    @State private var host = ""
+    @State private var user = ""
     @State private var pass = ""
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
+                // 厂商选择
+                Picker("厂商", selection: $vendor) {
+                    ForEach(CpeVendor.allCases, id: \.self) { v in
+                        Text(v.displayName).tag(v)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: vendor) { v in
+                    host = v.defaultHost
+                    user = v.defaultUser
+                    Haptic.selection()
+                }
+
                 VStack(spacing: 8) {
                     TextField("设备地址", text: $host)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .keyboardType(.URL)
                         .padding(10)
                         .background(RoundedRectangle(cornerRadius: 10).fill(.background))
                     TextField("账号", text: $user)
@@ -574,7 +589,7 @@ struct DiagView: View {
                         .autocorrectionDisabled()
                         .padding(10)
                         .background(RoundedRectangle(cornerRadius: 10).fill(.background))
-                    SecureField(Settings.load().password.isEmpty ? "密码" : "已保存，留空则沿用", text: $pass)
+                    SecureField("密码", text: $pass)
                         .padding(10)
                         .background(RoundedRectangle(cornerRadius: 10).fill(.background))
                 }
@@ -604,6 +619,19 @@ struct DiagView: View {
         }
         .navigationTitle("连接诊断")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            // 默认带出当前设备的信息
+            if let p = store.activeProfile {
+                vendor = p.vendor
+                host = p.host
+                user = p.user
+                pass = p.password
+            } else {
+                vendor = .fiberhome
+                host = CpeVendor.fiberhome.defaultHost
+                user = CpeVendor.fiberhome.defaultUser
+            }
+        }
     }
 
     private func run() async {
@@ -613,25 +641,35 @@ struct DiagView: View {
 
         let h = host.trimmingCharacters(in: .whitespaces)
         let u = user.trimmingCharacters(in: .whitespaces)
-        let p = pass.isEmpty ? Settings.load().password : pass
 
-        // 0. 加密自检
-        let st = CpeNativeAPI.shared.selfTest()
-        lines.append(st.ok ? "✓ \(st.detail)" : "✗ \(st.detail)")
-        lines.append("")
-
+        lines.append("厂商: \(vendor.displayName)")
         lines.append("地址: \(h)")
         lines.append("账号: \(u)")
-        lines.append("密码: \(p.isEmpty ? "空" : "已填 \(p.count) 位")")
+        lines.append("密码: \(pass.isEmpty ? "空" : "已填 \(pass.count) 位")")
         lines.append("")
 
-        guard !p.isEmpty else {
-            lines.append("✗ 密码为空，无法测试")
+        guard !h.isEmpty, !u.isEmpty, !pass.isEmpty else {
+            lines.append("✗ 请完整填写地址、账号、密码")
             running = false
             return
         }
 
-        CpeNativeAPI.shared.configure(host: h, user: u, pass: p)
+        if vendor == .oppo {
+            await runOppo(host: h, user: u, pass: pass)
+        } else {
+            await runFiberhome(host: h, user: u, pass: pass)
+        }
+        running = false
+    }
+
+    // MARK: 烽火：原生 API
+
+    private func runFiberhome(host: String, user: String, pass: String) async {
+        let st = CpeNativeAPI.shared.selfTest()
+        lines.append(st.ok ? "✓ \(st.detail)" : "✗ \(st.detail)")
+        lines.append("")
+
+        CpeNativeAPI.shared.configure(host: host, user: user, pass: pass)
         do {
             try await CpeNativeAPI.shared.login()
             lines.append("✓ 登录成功")
@@ -653,6 +691,55 @@ struct DiagView: View {
             lines.append("— 原始响应 —")
             for t in CpeNativeAPI.trace { lines.append(t) }
         }
-        running = false
+    }
+
+    // MARK: OPPO：WebView 桥接
+
+    private func runOppo(host: String, user: String, pass: String) async {
+        lines.append("方式: WebView 桥接")
+        lines.append("")
+
+        let ok = await OppoBridge.shared.login(host: host, user: user, password: pass)
+        if !ok {
+            lines.append("✗ 登录失败: \(OppoBridge.shared.lastError ?? "未知")")
+            return
+        }
+        lines.append("✓ 登录成功")
+
+        // 取页面数据
+        for attempt in 1...3 {
+            let d = await OppoBridge.shared.fetchDashboard()
+            if !d.isEmpty {
+                lines.append("✓ 页面数据 \(d.count) 项")
+                if let m = d["model"] { lines.append("  型号: \(m)") }
+                if let b = d["band"] { lines.append("  频段: \(b)") }
+                if let p = d["pci"] { lines.append("  PCI: \(p)") }
+                if let r = d["rsrp"] { lines.append("  RSRP: \(r)") }
+                if let s = d["speedTx"] { lines.append("  上行: \(s)") }
+                break
+            }
+            if attempt == 3 { lines.append("✗ 页面数据为空") }
+            try? await Task.sleep(nanoseconds: 800_000_000)
+        }
+
+        // 取流量接口
+        let st = await OppoBridge.shared.fetchStats()
+        if let rx = st["rx"], let tx = st["tx"] {
+            lines.append("✓ 流量接口")
+            lines.append("  下行: \(rx) 字节")
+            lines.append("  上行: \(tx) 字节")
+            if let rr = st["rateRx"] { lines.append("  实时下行: \(rr) B/s") }
+            if let rt = st["rateTx"] { lines.append("  实时上行: \(rt) B/s") }
+        } else {
+            lines.append("✗ 流量接口无数据")
+        }
+
+        // 桥接日志
+        if !OppoBridge.shared.trace.isEmpty {
+            lines.append("")
+            lines.append("— 桥接日志 —")
+            for t in OppoBridge.shared.trace { lines.append(t) }
+        }
     }
 }
+
