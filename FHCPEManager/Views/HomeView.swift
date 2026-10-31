@@ -10,6 +10,7 @@ struct HomeView: View {
     @State private var showParam = false
     @State private var showSms = false
     @State private var showContract = false
+    @State private var showSwitcher = false
     @AppStorage("customDown") private var customDown: String = ""
     @AppStorage("customUp") private var customUp: String = ""
 
@@ -55,6 +56,11 @@ struct HomeView: View {
             }
             .sheet(isPresented: $showParam) {
                 ParamView().environmentObject(store)
+            }
+            .sheet(isPresented: $showSwitcher) {
+                DeviceSwitcher()
+                    .environmentObject(store)
+                    .presentationDetents([.medium, .large])
             }
             .sheet(isPresented: $showSms) {
                 SmsView().environmentObject(store)
@@ -103,9 +109,24 @@ struct HomeView: View {
 
                 Spacer()
 
-                Text(s.deviceModel)
-                    .font(.system(size: 13, weight: .bold))
+                // 设备型号：点击切换设备
+                Button {
+                    Haptic.light()
+                    showSwitcher = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(store.activeProfile?.displayTitle ?? s.deviceModel)
+                            .font(.system(size: 13, weight: .bold))
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 9, weight: .bold))
+                    }
                     .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Color.primary.opacity(0.06)))
+                }
+                .buttonStyle(.plain)
             }
 
             HStack(alignment: .center, spacing: 0) {
@@ -437,11 +458,34 @@ struct HomeView: View {
     }
 
     private var contractCards: some View {
-        HStack(spacing: 9) {
-            contractItem("QCI", s["qci"], "teal", subtitle: qciSubtitle)
-            contractItem("签约下行", pick(customDown, s["dlmax"]), "blue", unit: true)
-            contractItem("签约上行", pick(customUp, s["ulmax"]),
-                         "orange", unit: true, editable: true)
+        Group {
+            if store.isOppo {
+                // OPPO 无 QCI/AMBR，改为显示小区标识
+                HStack(spacing: 9) {
+                    contractItem("频段", s["band"].isEmpty ? "--" : "n" + s["band"],
+                                 "teal", subtitle: oppoBandHint)
+                    contractItem("PCI", s["pci"], "blue")
+                    contractItem("网络", s["netmode"] == "3" ? "5G" : "4G", "orange")
+                }
+            } else {
+                HStack(spacing: 9) {
+                    contractItem("QCI", s["qci"], "teal", subtitle: qciSubtitle)
+                    contractItem("签约下行", pick(customDown, s["dlmax"]), "blue", unit: true)
+                    contractItem("签约上行", pick(customUp, s["ulmax"]),
+                                 "orange", unit: true, editable: true)
+                }
+            }
+        }
+    }
+
+    /// OPPO 频段补充说明（n78 = 3.5GHz 主力频段）
+    private var oppoBandHint: String {
+        switch s["band"] {
+        case "78", "77", "79": return "3.5GHz"
+        case "1", "3":         return "1.8GHz"
+        case "28":             return "700MHz"
+        case "41":             return "2.6GHz"
+        default:               return "5G"
         }
     }
 
@@ -706,9 +750,10 @@ struct HomeView: View {
 
     /// 设备流量计数器约 12.5 秒刷新一次
     private var trafficIntervalText: String {
-        guard let t = store.trafficUpdatedAt else { return "设备约 12 秒更新" }
+        let base = store.isOppo ? "实时更新" : "设备约 12 秒更新"
+        guard let t = store.trafficUpdatedAt else { return base }
         let sec = Int(Date().timeIntervalSince(t))
-        return sec < 2 ? "刚刚更新" : "设备约 12 秒更新 · \(sec)s 前"
+        return sec < 2 ? "刚刚更新" : "\(base) · \(sec)s 前"
     }
 
 
@@ -759,14 +804,29 @@ struct HomeView: View {
                     .foregroundStyle(.secondary.opacity(0.8))
             }
 
-            // 一组：今日 / 本月，横排三项
-            trafficGroup("今日", rx: todayRx, tx: todayTx, total: bytes(s["todayTotal"]),
-                         dRx: store.todayRxDelta, dTx: store.todayTxDelta)
+            if store.isOppo {
+                // OPPO 只有累计值，不提供今日/本月分项
+                trafficGroup("累计", rx: bytes(s["monthRx"]), tx: bytes(s["monthTx"]),
+                             total: bytes(s["monthTotal"]),
+                             dRx: store.todayRxDelta, dTx: store.todayTxDelta)
 
-            Divider().opacity(0.35)
+                HStack(spacing: 4) {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 9))
+                    Text("设备累计值，不支持今日/本月分项")
+                        .font(.system(size: 9))
+                }
+                .foregroundStyle(.secondary.opacity(0.75))
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                trafficGroup("今日", rx: todayRx, tx: todayTx, total: bytes(s["todayTotal"]),
+                             dRx: store.todayRxDelta, dTx: store.todayTxDelta)
 
-            trafficGroup("本月", rx: bytes(s["monthRx"]), tx: bytes(s["monthTx"]),
-                         total: bytes(s["monthTotal"]), dRx: 0, dTx: 0)
+                Divider().opacity(0.35)
+
+                trafficGroup("本月", rx: bytes(s["monthRx"]), tx: bytes(s["monthTx"]),
+                             total: bytes(s["monthTotal"]), dRx: 0, dTx: 0)
+            }
         }
         .padding(16)
         .glassCard(radius: 24)
