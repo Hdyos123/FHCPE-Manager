@@ -18,6 +18,7 @@ struct LoginView: View {
     @State private var logs: [String] = []
     @State private var showLogs = true
     @State private var detecting = false
+    @State private var hasAutoDetected = false
     @FocusState private var focus: Field?
 
     private enum Field { case host, user, pass }
@@ -42,6 +43,25 @@ struct LoginView: View {
                 .scrollDismissesKeyboard(.interactively)
             }
             .navigationBarHidden(true)
+        }
+        .task {
+            guard !hasAutoDetected else { return }
+            hasAutoDetected = true
+
+            // 已有保存的设备，直接带出来，不扫描（省时间）
+            if let p = ProfileStore.active ?? ProfileStore.loadAll().first {
+                vendor = p.vendor
+                host = p.host
+                user = p.user
+                password = p.password
+                addLog("已载入上次设备：\(p.vendor.displayName) @ \(p.host)")
+                if !p.password.isEmpty { focus = .pass }
+                return
+            }
+
+            // 没有保存过，自动扫描
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            await autoDetect()
         }
         .sheet(isPresented: $showVendorPicker) {
             VendorPicker(current: vendor, onSelect: selectVendor)
@@ -151,7 +171,7 @@ struct LoginView: View {
                             Image(systemName: "antenna.radiowaves.left.and.right")
                                 .font(.system(size: 12, weight: .medium))
                         }
-                        Text(detecting ? "正在扫描局域网…" : "自动检测设备")
+                        Text(detecting ? "正在扫描局域网…" : (vendor == nil ? "自动检测设备" : "重新检测"))
                             .font(.system(size: 13, weight: .medium))
                     }
                     .foregroundStyle(.blue)
@@ -333,6 +353,7 @@ struct LoginView: View {
 
     /// 自动扫描局域网并识别设备
     private func autoDetect() async {
+        guard !detecting else { return }
         detecting = true
         addLog("开始扫描局域网…")
 
