@@ -564,6 +564,38 @@ struct DiagView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
+                // 自动扫描
+                Button {
+                    Task {
+                        running = true
+                        lines = ["正在扫描局域网…"]
+                        let results = await CpeDetector.detect()
+                        lines = []
+                        if results.isEmpty {
+                            lines.append("✗ 未发现可识别的 CPE")
+                        } else {
+                            for r in results {
+                                lines.append("✓ \(r.vendor.displayName) · \(r.host) · \(r.evidence)")
+                            }
+                            vendor = results[0].vendor
+                            host = results[0].host
+                            user = results[0].vendor.defaultUser
+                        }
+                        running = false
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        if running { ProgressView().scaleEffect(0.7) }
+                        Text(running ? "扫描中…" : "扫描局域网设备").font(.system(size: 13))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 38)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(Color.blue.opacity(0.1)))
+                    .foregroundStyle(.blue)
+                }
+                .buttonStyle(.plain)
+                .disabled(running)
+
                 // 厂商选择
                 Picker("厂商", selection: $vendor) {
                     ForEach(CpeVendor.allCases, id: \.self) { v in
