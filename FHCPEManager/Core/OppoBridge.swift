@@ -95,21 +95,37 @@ final class OppoBridge: NSObject, ObservableObject {
             req.timeoutInterval = 15
             wv.load(req)
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 25) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 45) { [weak self] in
                 guard let self, let p = self.pendingLogin else { return }
                 self.pendingLogin = nil
-                self.lastError = "连接超时，请确认已连接 OPPO CPE 的 Wi-Fi"
+                self.lastError = "连接超时（45s），请确认已连接 OPPO CPE 的 Wi-Fi"
                 p.resume(returning: false)
             }
         }
     }
 
+    /// 诊断日志
+    private(set) var trace: [String] = []
+    private func log(_ s: String) {
+        trace.append(s)
+        if trace.count > 30 { trace.removeFirst() }
+    }
+
     private func doLogin() async -> Bool {
+        trace.removeAll()
+        log("页面加载完成")
+
         // 等 Vue 渲染出输入框
-        for _ in 0..<10 {
+        var inputReady = false
+        for i in 0..<15 {
             let ok = await jsCall("function(){ return document.querySelectorAll('input').length >= 2; }")
-            if (ok as? Bool) == true { break }
+            if (ok as? Bool) == true { inputReady = true; log("输入框就绪 (\(i*400)ms)"); break }
             try? await Task.sleep(nanoseconds: 400_000_000)
+        }
+        if !inputReady {
+            log("✗ 15 次探测仍未找到输入框")
+            lastError = "页面未渲染登录框，请重试"
+            return false
         }
 
         let body = """
@@ -139,6 +155,7 @@ final class OppoBridge: NSObject, ObservableObject {
         """
         let r = await jsCall(body)
         let hash = (r as? String) ?? ""
+        log("提交后 hash: \(hash)")
 
         if hash.contains("login") {
             lastError = "用户名或密码错误"
@@ -287,6 +304,7 @@ extension OppoBridge: WKScriptMessageHandler {
 extension OppoBridge: WKNavigationDelegate {
     nonisolated func webView(_ wv: WKWebView, didFinish nav: WKNavigation!) {
         Task { @MainActor in
+            self.log("didFinish: \(wv.url?.absoluteString ?? "?")")
             guard self.pendingLogin != nil else { return }
             let ok = await self.doLogin()
             self.pendingLogin?.resume(returning: ok)
@@ -302,6 +320,7 @@ extension OppoBridge: WKNavigationDelegate {
     }
 
     private func fail(_ e: Error) {
+        log("✗ 加载失败: \(e.localizedDescription)")
         lastError = "无法连接设备：" + e.localizedDescription
         pendingLogin?.resume(returning: false)
         pendingLogin = nil
