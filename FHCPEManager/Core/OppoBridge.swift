@@ -285,7 +285,7 @@ final class OppoBridge: NSObject, ObservableObject {
         // 只在 JS 侧取一次 innerText，就地提取需要的行，减少跨进程传输
         // 分隔符用 ||| 和 ###，避免 Swift 字符串转义冲突
         let body = """
-        function(){
+        (function(){
           var t = document.body.innerText;
           if (!t) return '';
           var lines = t.split(String.fromCharCode(10));
@@ -306,7 +306,7 @@ final class OppoBridge: NSObject, ObservableObject {
           var m = t.match(/total of ([0-9]+) devices?/);
           if (m) out.push('_deviceCount###' + m[1]);
           return out.join('|||');
-        }
+        })()
         """
         let raw = await evalDirect(body) ?? ""
         guard !raw.isEmpty else {
