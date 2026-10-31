@@ -134,15 +134,16 @@ final class OppoBridge: NSObject, ObservableObject {
             if loginToken != myToken { log("被新登录中断"); return false }
             let elapsed = Int(Date().timeIntervalSince(t0))
 
-            let st = await jsCall("""
-            function(){
+            // 用 evalDirect（直接 evaluateJavaScript），不走 __oppoCall 桥
+            let st = await evalDirect("""
+            (function(){
               return JSON.stringify({
                 inputs: document.querySelectorAll('input').length,
                 hash: location.hash,
                 ready: document.readyState,
                 body: (document.body ? document.body.innerHTML.length : 0)
               });
-            }
+            })()
             """)
 
             guard let str = st as? String else {
@@ -198,8 +199,8 @@ final class OppoBridge: NSObject, ObservableObject {
         var inputReady = false
         var lastState = ""
         for i in 0..<15 {
-            let st = await jsCall("""
-            function(){
+            let st = await evalDirect("""
+            (function(){
               return JSON.stringify({
                 inputs: document.querySelectorAll('input').length,
                 hash: location.hash,
@@ -207,7 +208,7 @@ final class OppoBridge: NSObject, ObservableObject {
                 bodyLen: (document.body ? document.body.innerHTML.length : 0),
                 hasBridge: typeof window.__oppoCall
               });
-            }
+            })()
             """)
             lastState = (st as? String) ?? "(nil)"
             if let str = st as? String,
@@ -229,33 +230,38 @@ final class OppoBridge: NSObject, ObservableObject {
             return false
         }
 
-        let body = """
-        function(){
-          return new Promise(function(resolve){
-            try {
-              var ins = document.querySelectorAll('input');
-              if (ins.length < 2) { resolve('NO_INPUT'); return; }
-              var setter = Object.getOwnPropertyDescriptor(
-                window.HTMLInputElement.prototype, 'value').set;
-              setter.call(ins[0], '\(jsEscape(user))');
-              ins[0].dispatchEvent(new Event('input', {bubbles:true}));
-              setter.call(ins[1], '\(jsEscape(password))');
-              ins[1].dispatchEvent(new Event('input', {bubbles:true}));
+        // 用 evalDirect 执行，但 Promise 需要额外等待——改成轮询 hash
+        _ = await evalDirect("""
+        (function(){
+          try {
+            var ins = document.querySelectorAll('input');
+            if (ins.length < 2) return 'NO_INPUT';
+            var setter = Object.getOwnPropertyDescriptor(
+              window.HTMLInputElement.prototype, 'value').set;
+            setter.call(ins[0], '\(jsEscape(user))');
+            ins[0].dispatchEvent(new Event('input', {bubbles:true}));
+            setter.call(ins[1], '\(jsEscape(password))');
+            ins[1].dispatchEvent(new Event('input', {bubbles:true}));
+            setTimeout(function(){
+              var btn = Array.prototype.slice.call(
+                document.querySelectorAll('button')).filter(function(b){
+                  return /LOGIN/i.test(b.textContent);
+                })[0];
+              if (btn) btn.click();
+            }, 400);
+            return 'SUBMITTED';
+          } catch(e) { return 'ERR:' + e.message; }
+        })()
+        """, timeout: 5)
 
-              setTimeout(function(){
-                var btn = Array.prototype.slice.call(
-                  document.querySelectorAll('button')).filter(function(b){
-                    return /LOGIN|登录/i.test(b.textContent);
-                  })[0];
-                if (btn) btn.click();
-                setTimeout(function(){ resolve(location.hash); }, 2500);
-              }, 400);
-            } catch(e) { resolve('ERR:' + e.message); }
-          });
+        // 等待跳转（最多 8 秒）
+        var hash = ""
+        for _ in 0..<16 {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            let h = await evalDirect("location.hash", timeout: 2) ?? ""
+            hash = h
+            if !h.contains("login") && !h.isEmpty { break }
         }
-        """
-        let r = await jsCall(body)
-        let hash = (r as? String) ?? ""
         log("提交后 hash: \(hash)")
 
         if hash.contains("login") {
@@ -302,7 +308,7 @@ final class OppoBridge: NSObject, ObservableObject {
           return out.join('|||');
         }
         """
-        let raw = (await jsCall(body) as? String) ?? ""
+        let raw = await evalDirect(body) ?? ""
         guard !raw.isEmpty else { return [:] }
 
         // 解析成字典
@@ -347,7 +353,40 @@ final class OppoBridge: NSObject, ObservableObject {
           });
         }
         """
-        guard let str = await jsCall(body) as? String,
+        // Promise 结果写到全局变量，再轮询读取
+        _ = await evalDirect("""
+        (function(){
+          window.__statsResult = null;
+          try {
+            var app = document.querySelector('#app');
+            var vm = app && app.__vue__;
+            var ax = null;
+            (function walk(v, d){
+              if (!v || d > 6 || ax) return;
+              if (v.$http) { ax = v.$http; return; }
+              (v.$children || []).forEach(function(c){ walk(c, d+1); });
+            })(vm, 0);
+            if (!ax) { window.__statsResult = '{"error":"no_axios"}'; return 'ok'; }
+            ax.post('/NetStats/GetStats', {}).then(function(r){
+              var s = r && r.Stats && r.Stats[0];
+              window.__statsResult = s ? JSON.stringify({
+                rx: s.BytesReceived, tx: s.BytesSent,
+                rateRx: s.RateReceived, rateTx: s.RateSent
+              }) : '{"error":"no_stats"}';
+            }).catch(function(e){ window.__statsResult = '{"error":"' + String(e) + '"}'; });
+            return 'ok';
+          } catch(e) { window.__statsResult = '{"error":"' + e.message + '"}'; return 'ok'; }
+        })()
+        """, timeout: 5)
+
+        // 轮询读取结果
+        var str: String?
+        for _ in 0..<10 {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            str = await evalDirect("window.__statsResult || ''", timeout: 2)
+            if let v = str, !v.isEmpty, v != "null" { break }
+        }
+        guard let str = str,
               let d = str.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
             return [:]
@@ -356,6 +395,29 @@ final class OppoBridge: NSObject, ObservableObject {
     }
 
     // MARK: 底层
+
+    /// 直接执行 JS 并返回结果（不依赖 __oppoCall 注入脚本）
+    /// 用于页面脚本注入失效时的兜底
+    func evalDirect(_ js: String, timeout: TimeInterval = 3) async -> String? {
+        guard let wv = webView else { return nil }
+        return await withCheckedContinuation { (c: CheckedContinuation<String?, Never>) in
+            var done = false
+            let lock = NSLock()
+            let finish: (String?) -> Void = { v in
+                lock.lock(); defer { lock.unlock() }
+                guard !done else { return }
+                done = true
+                c.resume(returning: v)
+            }
+            wv.evaluateJavaScript(js) { r, e in
+                if e != nil { finish(nil) }
+                else if let s = r as? String { finish(s) }
+                else if let r = r { finish(String(describing: r)) }
+                else { finish(nil) }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { finish(nil) }
+        }
+    }
 
     /// 自检：验证 WebView 的 JS 引擎能否执行
     func selfTest() async -> String {
