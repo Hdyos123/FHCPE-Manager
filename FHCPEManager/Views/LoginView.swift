@@ -15,6 +15,8 @@ struct LoginView: View {
     @State private var busy = false
     @State private var remember = true
     @State private var autoLogin = true
+    @State private var logs: [String] = []
+    @State private var showLogs = true
     @FocusState private var focus: Field?
 
     private enum Field { case host, user, pass }
@@ -28,25 +30,22 @@ struct LoginView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         header
                         formCard
-                            .padding(.top, 26)
-                        footerHint
-                            .padding(.top, 20)
-                        logSection
                             .padding(.top, 22)
+                        FooterLog(logs: logs, expanded: $showLogs)
+                            .padding(.top, 20)
                         Spacer().frame(height: 30)
                     }
                     .padding(.horizontal, 20)
-                    .padding(.top, 24)
+                    .padding(.top, 20)
                 }
                 .scrollDismissesKeyboard(.interactively)
             }
             .navigationBarHidden(true)
-            .sheet(isPresented: $showVendorPicker) {
-                VendorPicker(current: vendor) { v in
-                    selectVendor(v)
-                }
-                .presentationDetents([.medium])
-            }
+        }
+        .sheet(isPresented: $showVendorPicker) {
+            VendorPicker(current: vendor, onSelect: selectVendor)
+                .presentationDetents([.height(300)])
+                .presentationDragIndicator(.visible)
         }
     }
 
@@ -70,19 +69,9 @@ struct LoginView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 7) {
-                Circle()
-                    .fill(Color.green)
-                    .frame(width: 7, height: 7)
-                Text("网络面板助手")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-
             Text("连接你的设备")
                 .font(.system(size: 34, weight: .bold))
                 .foregroundStyle(.primary)
-                .padding(.top, 2)
 
             Text("选择厂商后连接当前局域网内的设备")
                 .font(.system(size: 14))
@@ -94,6 +83,17 @@ struct LoginView: View {
 
     private var formCard: some View {
         VStack(alignment: .leading, spacing: 16) {
+            // WiFi 提示（移到上方）
+            HStack(spacing: 6) {
+                Image(systemName: "wifi.exclamationmark")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.orange)
+                Text("请先连接设备的 Wi-Fi，再开始管理")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 2)
+
             // 厂商
             VStack(alignment: .leading, spacing: 8) {
                 Text("设备厂商")
@@ -128,17 +128,16 @@ struct LoginView: View {
                     }
                     .padding(12)
                     .background(fieldBg)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
 
-            // 地址
             fieldBlock("管理地址", placeholder: "请先选择设备厂商",
                        text: $host, field: .host, disabled: vendor == nil)
 
-            // 账号
-            fieldBlock("管理员账号", placeholder: "admin",
-                       text: $user, field: .user)
+            fieldBlock("管理员账号", placeholder: "请先选择设备厂商",
+                       text: $user, field: .user, disabled: vendor == nil)
 
             // 密码
             VStack(alignment: .leading, spacing: 8) {
@@ -150,10 +149,10 @@ struct LoginView: View {
                     Group {
                         if showPassword {
                             TextField("", text: $password,
-                                      prompt: Text("请先选择设备厂商").foregroundColor(.secondary.opacity(0.6)))
+                                      prompt: pwdPrompt)
                         } else {
                             SecureField("", text: $password,
-                                        prompt: Text("请先选择设备厂商").foregroundColor(.secondary.opacity(0.6)))
+                                        prompt: pwdPrompt)
                         }
                     }
                     .font(.system(size: 16))
@@ -161,6 +160,14 @@ struct LoginView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .focused($focus, equals: .pass)
+                    .submitLabel(.go)
+                    .onSubmit {
+                        if canConnect && !busy {
+                            Haptic.medium()
+                            Task { await doConnect() }
+                        }
+                    }
+                    .disabled(vendor == nil)
 
                     if !password.isEmpty {
                         Button {
@@ -190,16 +197,12 @@ struct LoginView: View {
                 .background(fieldBg)
             }
 
-            // 开关行
+            // 开关
             HStack {
                 toggleItem("记住密码", isOn: $remember)
                 toggleItem("自动登录", isOn: $autoLogin)
             }
             .padding(.top, 2)
-
-            Text("管理员凭据只保存于本机，不会上传服务器")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary.opacity(0.85))
 
             // 连接按钮
             Button {
@@ -219,7 +222,7 @@ struct LoginView: View {
                 )
             }
             .disabled(!canConnect || busy)
-            .padding(.top, 6)
+            .padding(.top, 4)
         }
         .padding(18)
         .background(
@@ -230,6 +233,11 @@ struct LoginView: View {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .strokeBorder(Color.primary.opacity(scheme == .dark ? 0.12 : 0.06), lineWidth: 1)
         )
+    }
+
+    private var pwdPrompt: Text {
+        Text(vendor == nil ? "请先选择设备厂商" : "请输入密码")
+            .foregroundColor(.secondary.opacity(0.6))
     }
 
     private var fieldBg: some View {
@@ -253,6 +261,14 @@ struct LoginView: View {
                 .autocorrectionDisabled()
                 .keyboardType(.URL)
                 .focused($focus, equals: field)
+                .submitLabel(.next)
+                .onSubmit {
+                    switch field {
+                    case .host: focus = .user
+                    case .user: focus = .pass
+                    case .pass: focus = nil
+                    }
+                }
                 .disabled(disabled)
                 .padding(.horizontal, 14)
                 .frame(height: 52)
@@ -273,36 +289,6 @@ struct LoginView: View {
         }
     }
 
-    private var footerHint: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "info.circle")
-                .font(.system(size: 12))
-            Text("请先连接设备的 Wi-Fi，再开始管理。")
-                .font(.system(size: 12.5))
-        }
-        .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity, alignment: .center)
-    }
-
-    // MARK: 日志
-
-    private var logSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            NavigationLink {
-                DiagView().environmentObject(store)
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "stethoscope")
-                        .font(.system(size: 11))
-                    Text("连接诊断")
-                        .font(.system(size: 12.5))
-                }
-                .foregroundStyle(.blue.opacity(0.85))
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .center)
-    }
-
     // MARK: 逻辑
 
     private var canConnect: Bool {
@@ -313,27 +299,36 @@ struct LoginView: View {
 
     private func selectVendor(_ v: CpeVendor) {
         vendor = v
-        showVendorPicker = false
-        if host.isEmpty || CpeVendor.allCases.contains(where: { $0.defaultHost == host }) {
-            host = v.defaultHost
-        }
-        if user.isEmpty || CpeVendor.allCases.contains(where: { $0.defaultUser == user }) {
-            user = v.defaultUser
-        }
+        host = v.defaultHost
+        user = v.defaultUser
         Haptic.selection()
+        addLog("已选择厂商：\(v.displayName)（\(v.defaultHost) / \(v.defaultUser)）")
+    }
+
+    private func addLog(_ s: String) {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        logs.append("[\(f.string(from: Date()))] \(s)")
+        if logs.count > 60 { logs.removeFirst() }
     }
 
     private func doConnect() async {
-        guard let v = vendor else { return }
+        guard let v = vendor else {
+            addLog("✗ 请先选择设备厂商")
+            store.errorText = "请先选择设备厂商"
+            return
+        }
         let h = host.trimmingCharacters(in: .whitespacesAndNewlines)
         let u = user.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !h.isEmpty, !u.isEmpty, !password.isEmpty else {
+            addLog("✗ 请完整填写连接信息")
             store.errorText = "请完整填写连接信息"
             return
         }
 
         busy = true
         store.errorText = nil
+        addLog("开始连接 \(v.displayName) @ \(h)")
 
         var p = CpeProfile.make(vendor: v)
         p.host = h
@@ -345,12 +340,71 @@ struct LoginView: View {
         busy = false
 
         if ok {
+            addLog("✓ 连接成功")
             if remember {
                 ProfileStore.upsert(p)
                 ProfileStore.activeID = p.id
                 UserDefaults.standard.set(autoLogin, forKey: "autoLogin")
             }
             store.startPolling()
+        } else {
+            addLog("✗ " + (store.errorText ?? "连接失败"))
+            // OPPO 桥接日志也贴出来
+            if v == .oppo {
+                for t in OppoBridge.shared.trace { addLog("  " + t) }
+            }
+        }
+    }
+}
+
+// MARK: - 底部诊断日志
+
+struct FooterLog: View {
+    let logs: [String]
+    @Binding var expanded: Bool
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                Haptic.light()
+                withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "stethoscope")
+                        .font(.system(size: 11))
+                    Text("诊断日志")
+                        .font(.system(size: 12.5, weight: .medium))
+                    Spacer()
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .foregroundStyle(.secondary)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 3) {
+                    if logs.isEmpty {
+                        Text("暂无日志，连接后会在这里显示过程")
+                            .foregroundStyle(.secondary.opacity(0.6))
+                    } else {
+                        ForEach(Array(logs.enumerated()), id: \.offset) { _, l in
+                            Text(l)
+                                .foregroundStyle(l.contains("✗") ? Color.red : Color.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+                .font(.system(size: 10.5, design: .monospaced))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(scheme == .dark ? Color.white.opacity(0.05) : Color.primary.opacity(0.04))
+                )
+            }
         }
     }
 }
@@ -363,53 +417,84 @@ struct VendorPicker: View {
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    ForEach(CpeVendor.allCases, id: \.self) { v in
-                        Button {
-                            onSelect(v)
-                            dismiss()
-                        } label: {
-                            HStack(spacing: 12) {
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(Color.blue.opacity(0.14))
-                                    .frame(width: 40, height: 40)
-                                    .overlay(
-                                        Image(systemName: v.icon)
-                                            .font(.system(size: 17, weight: .medium))
-                                            .foregroundStyle(.blue)
-                                    )
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(v.displayName)
-                                        .font(.system(size: 16, weight: .medium))
-                                        .foregroundStyle(.primary)
-                                    Text(v.hint)
-                                        .font(.system(size: 11.5))
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if current == v {
-                                    Image(systemName: "checkmark")
+        VStack(spacing: 0) {
+            // 标题
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("选择设备厂商")
+                        .font(.system(size: 19, weight: .bold))
+                    Text("地址与密码分别保存")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(.secondary.opacity(0.5))
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 22)
+            .padding(.bottom, 16)
+
+            // 厂商列表（用 Button 而非 List，避免点击失效）
+            VStack(spacing: 10) {
+                ForEach(CpeVendor.allCases, id: \.self) { v in
+                    Button {
+                        Haptic.medium()
+                        onSelect(v)
+                        dismiss()
+                    } label: {
+                        HStack(spacing: 12) {
+                            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                .fill(Color.blue.opacity(0.15))
+                                .frame(width: 44, height: 44)
+                                .overlay(
+                                    Image(systemName: v.icon)
+                                        .font(.system(size: 19, weight: .medium))
                                         .foregroundStyle(.blue)
-                                        .font(.system(size: 14, weight: .semibold))
-                                }
+                                )
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(v.displayName)
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundStyle(.primary)
+                                Text(v.hint)
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(.secondary)
                             }
-                            .padding(.vertical, 4)
+                            Spacer()
+                            if current == v {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 20))
+                                    .foregroundStyle(.blue)
+                            } else {
+                                Image(systemName: "circle")
+                                    .font(.system(size: 20))
+                                    .foregroundStyle(.secondary.opacity(0.25))
+                            }
                         }
-                        .buttonStyle(.plain)
+                        .padding(13)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color.primary.opacity(0.05))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .strokeBorder(current == v ? Color.blue.opacity(0.5) : Color.clear,
+                                              lineWidth: 1.5)
+                        )
+                        .contentShape(Rectangle())
                     }
-                } header: {
-                    Text("选择 CPE 厂商，地址与密码分别保存")
+                    .buttonStyle(.plain)
                 }
             }
-            .navigationTitle("选择设备厂商")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("关闭") { dismiss() }
-                }
-            }
+            .padding(.horizontal, 20)
+
+            Spacer()
         }
+        .background(Color(.systemGroupedBackground))
     }
 }
