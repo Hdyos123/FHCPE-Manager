@@ -20,7 +20,10 @@ final class CpeStore: ObservableObject {
     /// OPPO 慢变数据缓存（信号/小区/设备），避免每秒触发页面重排
     private var oppoSlowCache: [String: String] = [:]
     private var oppoSlowAt: Date = .distantPast
-    private let oppoSlowInterval: TimeInterval = 10
+    /// OPPO 速率接口缓存（避免 0.5 秒间隔时重复请求）
+    private var oppoStatsCache: [String: Any] = [:]
+    private var oppoStatsAt: Date = .distantPast
+    private let oppoSlowInterval: TimeInterval = 5
     @Published var smsList: [CpeSms] = []
     @Published var isLoggedIn = false
     /// 当前连接的设备
@@ -123,11 +126,11 @@ final class CpeStore: ObservableObject {
 
         // 取一次数据确认可用（页面刚跳转可能需要时间渲染）
         var d: [String: String] = [:]
-        for attempt in 1...6 {
+        for attempt in 1...8 {
             d = await OppoBridge.shared.fetchDashboard()
             if !d.isEmpty { break }
-            if attempt < 6 {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            if attempt < 8 {
+                try? await Task.sleep(nanoseconds: 400_000_000)
             }
         }
         guard !d.isEmpty else {
@@ -135,7 +138,8 @@ final class CpeStore: ObservableObject {
             return false
         }
 
-        ProfileStore.upsert(profile)
+        // OPPO 单独去重（每次登录 UUID 会变）
+        ProfileStore.upsertOppo(profile)
         ProfileStore.activeID = profile.id
         isLoggedIn = true
         await fetchStatus()
@@ -252,6 +256,8 @@ final class CpeStore: ObservableObject {
 
         // 迁移旧的单设备配置
         ProfileStore.migrateIfNeeded()
+        // 清理重复档案（同厂商+同地址只保留一条）
+        ProfileStore.dedupe()
 
         // 优先用上次选中的设备
         if let p = ProfileStore.active, !p.password.isEmpty {
@@ -302,13 +308,30 @@ final class CpeStore: ObservableObject {
                 let d = await OppoBridge.shared.fetchDashboard()
                 if !d.isEmpty {
                     v = OppoParser.normalize(d)
+                    // 页面里的速率作为兜底
+                    // 注意：normalize 里 speedRx 存的是「字节/秒」，要 ×8 才是 bit/s
+                    if let r = v["speedRx"], let n = Double(r), n > 0 {
+                        realtimeRx = n * 8
+                    }
+                    if let t = v["speedTx"], let m = Double(t), m > 0 {
+                        realtimeTx = m * 8
+                    }
                     oppoSlowCache = v
                     oppoSlowAt = Date()
                 }
             }
 
-            // ── 快变数据（速率/流量）：每次轮询都取，走轻量接口 ──
-            let st = await OppoBridge.shared.fetchStats()
+            // ── 快变数据（速率/流量）：每秒取一次，但避免重复调用 ──
+            var st: [String: Any] = [:]
+            if Date().timeIntervalSince(oppoStatsAt) >= 0.9 {
+                st = await OppoBridge.shared.fetchStats()
+                if !st.isEmpty {
+                    oppoStatsCache = st
+                    oppoStatsAt = Date()
+                }
+            } else {
+                st = oppoStatsCache
+            }
             if let rx = st["rx"] as? NSNumber, let tx = st["tx"] as? NSNumber {
                 let rxB = rx.doubleValue, txB = tx.doubleValue
 
@@ -326,11 +349,12 @@ final class CpeStore: ObservableObject {
                 lastOppoTx = txB
             }
 
-            if let rrx = st["rateRx"] as? NSNumber {
+            // 接口值优先（更精确），但要 > 0 才采用
+            if let rrx = st["rateRx"] as? NSNumber, rrx.doubleValue > 0 {
                 realtimeRx = rrx.doubleValue * 8
                 v["speedRx"] = String(Int(rrx.doubleValue))
             }
-            if let rtx = st["rateTx"] as? NSNumber {
+            if let rtx = st["rateTx"] as? NSNumber, rtx.doubleValue > 0 {
                 realtimeTx = rtx.doubleValue * 8
                 v["speedTx"] = String(Int(rtx.doubleValue))
             }
