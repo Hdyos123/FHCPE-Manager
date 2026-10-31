@@ -73,14 +73,12 @@ struct DeviceSwitcher: View {
     private func row(_ p: CpeProfile) -> some View {
         let isActive = store.activeProfile?.id == p.id
         return HStack(spacing: 12) {
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(Color.blue.opacity(isActive ? 0.18 : 0.10))
+            Image(p.vendor.logoAsset)
+                .resizable()
+                .scaledToFit()
                 .frame(width: 42, height: 42)
-                .overlay(
-                    Image(systemName: p.vendor.icon)
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(.blue)
-                )
+                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .opacity(isActive ? 1 : 0.85)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
