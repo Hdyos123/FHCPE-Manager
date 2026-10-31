@@ -14,8 +14,18 @@ final class CpeStore: ObservableObject {
     @Published var trafficUpdatedAt: Date?
 
     private var lastTodayTotal: Double = 0
+    /// OPPO 累计流量基准（字节）
+    private var lastOppoRx: Double = 0
+    private var lastOppoTx: Double = 0
+    /// OPPO 慢变数据缓存（信号/小区/设备），避免每秒触发页面重排
+    private var oppoSlowCache: [String: String] = [:]
+    private var oppoSlowAt: Date = .distantPast
+    private let oppoSlowInterval: TimeInterval = 10
     @Published var smsList: [CpeSms] = []
     @Published var isLoggedIn = false
+    /// 当前连接的设备
+    @Published var activeProfile: CpeProfile?
+    var isOppo: Bool { activeProfile?.vendor == .oppo }
     @Published var isLoading = false
     @Published var errorText: String?
     @Published var toastText: String?
@@ -86,6 +96,66 @@ final class CpeStore: ObservableObject {
     }
 
     // MARK: - 登录
+
+    /// 使用设备档案登录（自动按厂商分流）
+    func login(profile: CpeProfile) async -> Bool {
+        activeProfile = profile
+        if profile.vendor == .oppo {
+            return await loginOppo(profile)
+        }
+        return await login(host: profile.host, user: profile.user, password: profile.password)
+    }
+
+    /// OPPO 登录：WebView 桥接
+    private func loginOppo(_ profile: CpeProfile) async -> Bool {
+        errorText = nil
+        isLoading = true
+        defer { isLoading = false }
+
+        clearAll()
+        let ok = await OppoBridge.shared.login(host: profile.host,
+                                               user: profile.user,
+                                               password: profile.password)
+        guard ok else {
+            errorText = OppoBridge.shared.lastError ?? "登录失败"
+            return false
+        }
+
+        // 取一次数据确认可用
+        var d: [String: String] = [:]
+        for _ in 1...3 {
+            d = await OppoBridge.shared.fetchDashboard()
+            if !d.isEmpty { break }
+            try? await Task.sleep(nanoseconds: 800_000_000)
+        }
+        guard !d.isEmpty else {
+            errorText = "登录成功但读不到数据"
+            return false
+        }
+
+        ProfileStore.upsert(profile)
+        ProfileStore.activeID = profile.id
+        isLoggedIn = true
+        await fetchStatus()
+        return true
+    }
+
+    /// 切换设备前清空状态
+    private func clearAll() {
+        status = CpeStatus()
+        hosts = []
+        carriers = []
+        realtimeRx = 0
+        realtimeTx = 0
+        todayRxDelta = 0
+        todayTxDelta = 0
+        lastOppoRx = 0
+        lastOppoTx = 0
+        oppoSlowCache = [:]
+        oppoSlowAt = .distantPast
+        lastTodayTotal = 0
+        trafficUpdatedAt = Date()
+    }
 
     func login(host: String, user: String, password: String) async -> Bool {
         errorText = nil
@@ -174,30 +244,22 @@ final class CpeStore: ObservableObject {
     }
 
     func tryAutoLogin() async {
-        // 用户关闭了自动登录就不自动尝试
-        guard UserDefaults.standard.bool(forKey: "autoLogin") ||
-              UserDefaults.standard.object(forKey: "autoLogin") == nil else { return }
-        let cfg = Settings.load()
-        guard cfg.isConfigured else { return }
+        // 自动登录开关关闭则不尝试
+        let auto = UserDefaults.standard.object(forKey: "autoLogin") as? Bool ?? true
+        guard auto else { return }
 
-        CpeNativeAPI.shared.configure(host: cfg.host, user: cfg.user, pass: cfg.password)
-        if (try? await CpeNativeAPI.shared.login()) != nil,
-           let probe = try? await CpeNativeAPI.shared.values(CpeNode.overview),
-           !probe.isEmpty {
-            useNative = true
-            isLoggedIn = true
-            await fetchAll()
-            return
+        // 迁移旧的单设备配置
+        ProfileStore.migrateIfNeeded()
+
+        // 优先用上次选中的设备
+        if let p = ProfileStore.active, !p.password.isEmpty {
+            let ok = await login(profile: p)
+            if ok { return }
         }
 
-        let ok = await bridge.login(host: cfg.host, user: cfg.user, password: cfg.password)
-        if ok {
-            let probe = await bridge.fetchValues(CpeNode.overview)
-            if !probe.isEmpty {
-                useNative = false
-                isLoggedIn = true
-                await fetchAll()
-            }
+        // 兜底：试第一个可用档案
+        for p in ProfileStore.loadAll() where !p.password.isEmpty {
+            if await login(profile: p) { return }
         }
     }
 
@@ -230,6 +292,51 @@ final class CpeStore: ObservableObject {
     }
 
     func fetchStatus() async {
+        // OPPO 设备：走 WebView 桥接，解析首页文本
+        if isOppo {
+            // ── 慢变数据（信号/小区/设备信息）：10 秒一次 ──
+            var v = oppoSlowCache
+            if Date().timeIntervalSince(oppoSlowAt) > oppoSlowInterval || v.isEmpty {
+                let d = await OppoBridge.shared.fetchDashboard()
+                if !d.isEmpty {
+                    v = OppoParser.normalize(d)
+                    oppoSlowCache = v
+                    oppoSlowAt = Date()
+                }
+            }
+
+            // ── 快变数据（速率/流量）：每次轮询都取，走轻量接口 ──
+            let st = await OppoBridge.shared.fetchStats()
+            if let rx = st["rx"] as? NSNumber, let tx = st["tx"] as? NSNumber {
+                let rxB = rx.doubleValue, txB = tx.doubleValue
+
+                v["monthRx"] = String(Int(rxB))
+                v["monthTx"] = String(Int(txB))
+                v["monthTotal"] = String(Int(rxB + txB))
+                v["todayTotal"] = v["monthTotal"]
+
+                if lastOppoRx > 0, rxB > lastOppoRx {
+                    todayRxDelta += rxB - lastOppoRx
+                    todayTxDelta += max(0, txB - lastOppoTx)
+                    trafficUpdatedAt = Date()
+                }
+                lastOppoRx = rxB
+                lastOppoTx = txB
+            }
+
+            if let rrx = st["rateRx"] as? NSNumber {
+                realtimeRx = rrx.doubleValue * 8
+                v["speedRx"] = String(Int(rrx.doubleValue))
+            }
+            if let rtx = st["rateTx"] as? NSNumber {
+                realtimeTx = rtx.doubleValue * 8
+                v["speedTx"] = String(Int(rtx.doubleValue))
+            }
+
+            status.raw = v
+            return
+        }
+
         var v: [String: String] = [:]
         var failed = false
 
@@ -295,6 +402,12 @@ final class CpeStore: ObservableObject {
     func resetTrafficDelta() {
         todayRxDelta = 0
         todayTxDelta = 0
+        lastOppoRx = 0
+        lastOppoTx = 0
+        oppoSlowCache = [:]
+        oppoSlowAt = .distantPast
+        lastTodayTotal = 0
+        trafficUpdatedAt = Date()
     }
 
     func fetchHosts() async {
