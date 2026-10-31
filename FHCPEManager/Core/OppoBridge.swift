@@ -117,7 +117,15 @@ final class OppoBridge: NSObject, ObservableObject {
             if loginToken != myToken { log("被新登录中断"); return false }
             waited += 0.3
         }
-        log(pageLoaded ? "didFinish \(Int(waited))s" : "✗ didFinish 超时 20s")
+        log(pageLoaded ? "didFinish \(Int(waited))s" : "X didFinish 超时 20s")
+
+        // 关键诊断：JS 引擎是否可用
+        let jsOK = await selfTest()
+        log("JS 自检: " + jsOK)
+        if jsOK.hasPrefix("X") {
+            log("→ WebView 引擎不可用，此设备无法使用 WebView 方案")
+            return false
+        }
 
         // 阶段二：轮询探测输入框（最多 15 秒）
         var lastReport = -1
