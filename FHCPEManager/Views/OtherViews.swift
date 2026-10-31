@@ -699,6 +699,16 @@ struct DiagView: View {
         lines.append("方式: WebView 桥接")
         lines.append("")
 
+        // 第一步：JS 引擎自检
+        let js = await OppoBridge.shared.selfTest()
+        lines.append(js)
+        if js.hasPrefix("X") {
+            lines.append("")
+            lines.append("JS 引擎不可用，WebView 方案无法工作")
+            return
+        }
+        lines.append("")
+
         let ok = await OppoBridge.shared.login(host: host, user: user, password: pass)
         if !ok {
             lines.append("✗ 登录失败: \(OppoBridge.shared.lastError ?? "未知")")
