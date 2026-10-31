@@ -26,14 +26,13 @@ struct RootView: View {
                 .allowsHitTesting(false)
 
             // OPPO CPE 的会话宿主
-            // OPPO 的 WKWebView：
-            // 关键：不能设置任何 opacity！SwiftUI 的 .opacity 会与 WebView 自身的
-            // alpha 相乘，有效透明度趋近 0 时 WebKit 会暂停 JS 引擎。
-            // 改用「尺寸很小 + 移出可视区」的方式让它不可见。
+            // WebKit 规则：视图必须「在窗口内」且 alpha > 0，否则暂停 JS。
+            // 所以：放在左下角、尺寸小、不加 opacity、不用 offset 移出屏幕。
             OppoHost()
                 .frame(width: 2, height: 2)
-                .offset(x: -2000, y: -2000)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                 .allowsHitTesting(false)
+                .zIndex(-1)
 
             if store.isLoggedIn {
                 MainTabView()
