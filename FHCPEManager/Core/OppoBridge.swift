@@ -288,7 +288,7 @@ final class OppoBridge: NSObject, ObservableObject {
         function(){
           var t = document.body.innerText;
           if (!t) return '';
-          var lines = t.split('\n');
+          var lines = t.split(String.fromCharCode(10));
           var out = [];
           var want = {};
           ['UL Data Rate','DL Data Rate','RSRP','RSRQ','SINR','PCI',
@@ -309,7 +309,14 @@ final class OppoBridge: NSObject, ObservableObject {
         }
         """
         let raw = await evalDirect(body) ?? ""
-        guard !raw.isEmpty else { return [:] }
+        guard !raw.isEmpty else {
+            log("XDashboard 返回空")
+            // 诊断：单独读一次 innerText 看长度
+            let len = await evalDirect("(document.body ? document.body.innerText.length : -1)") ?? "nil"
+            log("  innerText 长度: " + len)
+            return [:]
+        }
+        log("Dashboard 拿到 " + String(raw.count) + " 字符")
 
         // 解析成字典
         var d: [String: String] = [:]
@@ -328,31 +335,6 @@ final class OppoBridge: NSObject, ObservableObject {
     func fetchStats() async -> [String: Any] {
         guard ready else { return [:] }
 
-        let body = """
-        function(){
-          // 从 Vue 根实例拿带拦截器的 axios
-          var app = document.querySelector('#app');
-          var vm = app && app.__vue__;
-          var ax = null;
-          (function walk(v, d){
-            if (!v || d > 6 || ax) return;
-            if (v.$http) { ax = v.$http; return; }
-            (v.$children || []).forEach(function(c){ walk(c, d+1); });
-          })(vm, 0);
-          if (!ax) return JSON.stringify({error:'no_axios'});
-
-          return ax.post('/NetStats/GetStats', {}).then(function(r){
-            var s = r && r.Stats && r.Stats[0];
-            if (!s) return JSON.stringify({error:'no_stats'});
-            return JSON.stringify({
-              rx: s.BytesReceived,
-              tx: s.BytesSent,
-              rateRx: s.RateReceived,
-              rateTx: s.RateSent
-            });
-          });
-        }
-        """
         // Promise 结果写到全局变量，再轮询读取
         _ = await evalDirect("""
         (function(){
