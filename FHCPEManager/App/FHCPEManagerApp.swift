@@ -26,9 +26,13 @@ struct RootView: View {
                 .allowsHitTesting(false)
 
             // OPPO CPE 的会话宿主
+            // OPPO 的 WKWebView：
+            // 关键：不能设置任何 opacity！SwiftUI 的 .opacity 会与 WebView 自身的
+            // alpha 相乘，有效透明度趋近 0 时 WebKit 会暂停 JS 引擎。
+            // 改用「尺寸很小 + 移出可视区」的方式让它不可见。
             OppoHost()
-                .frame(width: 1, height: 1)
-                .opacity(0.01)
+                .frame(width: 2, height: 2)
+                .offset(x: -2000, y: -2000)
                 .allowsHitTesting(false)
 
             if store.isLoggedIn {
