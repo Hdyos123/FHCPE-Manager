@@ -434,7 +434,12 @@ struct LoginView: View {
         if ok {
             addLog("✓ 连接成功")
             if remember {
-                ProfileStore.upsert(p)
+                // 按厂商分开保存
+                if p.vendor == .oppo {
+                    ProfileStore.upsertOppo(p)
+                } else {
+                    ProfileStore.upsert(p)
+                }
                 ProfileStore.activeID = p.id
                 UserDefaults.standard.set(autoLogin, forKey: "autoLogin")
             }
