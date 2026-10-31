@@ -22,22 +22,8 @@ jobs:
       - name: Show Xcode
         run: xcodebuild -version
 
-      - name: Cache Homebrew
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/Library/Caches/Homebrew
-            /usr/local/Cellar
-            /opt/homebrew/Cellar
-          key: brew-xcodegen-${{ runner.os }}
-
       - name: Install XcodeGen
-        run: |
-          if command -v xcodegen >/dev/null 2>&1; then
-            echo "xcodegen 已缓存"
-          else
-            brew install xcodegen
-          fi
+        run: brew install xcodegen
 
       - name: Resolve version
         id: ver
