@@ -121,15 +121,17 @@ final class CpeStore: ObservableObject {
             return false
         }
 
-        // 取一次数据确认可用
+        // 取一次数据确认可用（页面刚跳转可能需要时间渲染）
         var d: [String: String] = [:]
-        for _ in 1...3 {
+        for attempt in 1...6 {
             d = await OppoBridge.shared.fetchDashboard()
             if !d.isEmpty { break }
-            try? await Task.sleep(nanoseconds: 800_000_000)
+            if attempt < 6 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
         }
         guard !d.isEmpty else {
-            errorText = "登录成功但读不到数据"
+            errorText = "登录成功但读不到数据，请在诊断页查看桥接日志"
             return false
         }
 
