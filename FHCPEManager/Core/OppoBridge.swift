@@ -254,11 +254,11 @@ final class OppoBridge: NSObject, ObservableObject {
         })()
         """, timeout: 5)
 
-        // 等待跳转（最多 8 秒）
+        // 等待跳转（最多 5 秒，一检测到就返回）
         var hash = ""
-        for _ in 0..<16 {
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            let h = await evalDirect("location.hash", timeout: 2) ?? ""
+        for _ in 0..<20 {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            let h = await evalDirect("location.hash", timeout: 1) ?? ""
             hash = h
             if !h.contains("login") && !h.isEmpty { break }
         }
