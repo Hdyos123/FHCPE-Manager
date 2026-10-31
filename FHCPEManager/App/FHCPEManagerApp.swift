@@ -25,6 +25,12 @@ struct RootView: View {
                 .opacity(0.01)
                 .allowsHitTesting(false)
 
+            // OPPO CPE 的会话宿主
+            OppoHost()
+                .frame(width: 1, height: 1)
+                .opacity(0.01)
+                .allowsHitTesting(false)
+
             if store.isLoggedIn {
                 MainTabView()
             } else {
@@ -51,6 +57,7 @@ struct RootView: View {
             // 恢复屏幕常亮设置
             UIApplication.shared.isIdleTimerDisabled =
                 UserDefaults.standard.bool(forKey: "keepAwake")
+            // 自愈定时器：每 5 秒检查轮询是否还活着（分屏挂边时系统可能挂起 Task）
             Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
                 Task { @MainActor in store.ensurePollingAlive() }
             }
@@ -82,6 +89,17 @@ struct BridgeHost: UIViewRepresentable {
         let v = UIView()
         v.backgroundColor = .clear
         CpeBridge.shared.attach(to: v)
+        return v
+    }
+    func updateUIView(_ uiView: UIView, context: Context) {}
+}
+
+/// 把 OPPO 的 WKWebView 挂到 SwiftUI 视图树里
+struct OppoHost: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView()
+        v.backgroundColor = .clear
+        OppoBridge.shared.attach(to: v)
         return v
     }
     func updateUIView(_ uiView: UIView, context: Context) {}
