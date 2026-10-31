@@ -17,6 +17,7 @@ struct LoginView: View {
     @State private var autoLogin = true
     @State private var logs: [String] = []
     @State private var showLogs = true
+    @State private var detecting = false
     @FocusState private var focus: Field?
 
     private enum Field { case host, user, pass }
@@ -138,6 +139,32 @@ struct LoginView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+
+                // 自动检测按钮
+                Button {
+                    Task { await autoDetect() }
+                } label: {
+                    HStack(spacing: 6) {
+                        if detecting {
+                            ProgressView().scaleEffect(0.7)
+                        } else {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        Text(detecting ? "正在扫描局域网…" : "自动检测设备")
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    .foregroundStyle(.blue)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 40)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color.blue.opacity(scheme == .dark ? 0.14 : 0.09))
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(detecting)
             }
 
             fieldBlock("管理地址", placeholder: "请先选择设备厂商",
@@ -303,6 +330,43 @@ struct LoginView: View {
     }
 
     private var canReveal: Bool { !user.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    /// 自动扫描局域网并识别设备
+    private func autoDetect() async {
+        detecting = true
+        addLog("开始扫描局域网…")
+
+        let results = await CpeDetector.detect()
+        detecting = false
+
+        guard let first = results.first else {
+            addLog("✗ 未发现可识别的 CPE 设备")
+            addLog("  请确认已连接设备 Wi-Fi")
+            return
+        }
+
+        // 找到就自动填充
+        vendor = first.vendor
+        host = first.host
+        user = first.vendor.defaultUser
+        Haptic.success()
+
+        addLog("✓ 发现 \(first.vendor.displayName)：\(first.host)（\(first.evidence)）")
+        if results.count > 1 {
+            addLog("  还发现 \(results.count - 1) 台，已选用第一台")
+        }
+        addLog("  已自动填入地址与账号，请输入密码")
+
+        // 有保存的密码就带出来
+        if let saved = ProfileStore.loadAll().first(where: {
+            $0.vendor == first.vendor && $0.host == first.host && !$0.password.isEmpty
+        }) {
+            password = saved.password
+            addLog("  已填入上次保存的密码")
+        }
+
+        focus = .pass
+    }
 
     private func selectVendor(_ v: CpeVendor) {
         vendor = v
