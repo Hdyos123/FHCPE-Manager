@@ -470,12 +470,12 @@ struct SettingsView: View {
     }
 
     /// 当前连接的设备信息
-    /// 连接信息：按厂商分开取
+    /// 连接信息：优先用当前设备档案
     private var connSubtitle: String {
-        if let p = store.activeProfile, p.vendor == .oppo {
-            return p.host + " · " + p.user          // OPPO：用档案
+        if let p = store.activeProfile {
+            return p.host + " · " + p.user
         }
-        let cfg = Settings.load()                    // 烽火：保持原逻辑
+        let cfg = Settings.load()
         return cfg.host + " · " + cfg.user
     }
 
