@@ -179,7 +179,7 @@ final class OppoBridge: NSObject, ObservableObject {
               out.push(l + '###' + lines[i+1].trim());
             }
           }
-          var m = t.match(/total of (\d+) devices?/);
+          var m = t.match(/total of ([0-9]+) devices?/);
           if (m) out.push('_deviceCount###' + m[1]);
           return out.join('|||');
         }
