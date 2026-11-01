@@ -177,7 +177,7 @@ struct HomeView: View {
                             Image(systemName: "desktopcomputer")
                                 .font(.system(size: 13))
                                 .foregroundStyle(.blue)
-                            Text("\(store.hosts.count)")
+                            Text("\(onlineDeviceCount)")
                                 .font(.system(size: 20, weight: .bold))
                             Text("在线设备")
                                 .font(.system(size: 9.5))
@@ -745,6 +745,14 @@ struct HomeView: View {
     }
 
     // MARK: - 流量
+
+    /// 在线设备数：烽火用 hosts，OPPO 用页面识别到的数量
+    private var onlineDeviceCount: Int {
+        if store.isOppo {
+            return Int(s["online"]) ?? 0
+        }
+        return store.hosts.count
+    }
 
     // MARK: - 流量标注
 
