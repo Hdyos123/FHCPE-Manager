@@ -17,10 +17,8 @@ final class CpeStore: ObservableObject {
     /// OPPO 累计流量基准（字节）
     private var lastOppoRx: Double = 0
     private var lastOppoTx: Double = 0
-    /// 速率采样用的独立变量（与流量统计分开）
-    private var lastSpeedRx: Double = 0
-    private var lastSpeedTx: Double = 0
-    private var lastSpeedAt: Date = .distantPast
+    /// 速率采样窗口（避免某些秒字节数没变导致显示 0）
+    private var speedSamples: [(t: Date, rx: Double, tx: Double)] = []
     /// OPPO 慢变数据缓存（信号/小区/设备），避免每秒触发页面重排
     private var oppoSlowCache: [String: String] = [:]
     private var oppoSlowAt: Date = .distantPast
@@ -158,9 +156,7 @@ final class CpeStore: ObservableObject {
         todayTxDelta = 0
         lastOppoRx = 0
         lastOppoTx = 0
-        lastSpeedRx = 0
-        lastSpeedTx = 0
-        lastSpeedAt = .distantPast
+        speedSamples.removeAll()
         oppoSlowCache = [:]
         oppoSlowAt = .distantPast
         lastTodayTotal = 0
@@ -312,6 +308,15 @@ final class CpeStore: ObservableObject {
                 let d = await OppoBridge.shared.fetchDashboard()
                 if !d.isEmpty {
                     v = OppoParser.normalize(d)
+                    // 首个采样前，先用页面的速率值垫着（避免显示 0）
+                    if speedSamples.isEmpty {
+                        if let r = v["speedRx"], let n = Double(r), n > 0 {
+                            realtimeRx = n * 8
+                        }
+                        if let t = v["speedTx"], let m = Double(t), m > 0 {
+                            realtimeTx = m * 8
+                        }
+                    }
                     oppoSlowCache = v
                     oppoSlowAt = Date()
 
@@ -328,24 +333,28 @@ final class CpeStore: ObservableObject {
                 }
             }
 
-            // ── 实时速率：用累计字节差计算（页面本身 5 秒才更新，但接口每秒都在变）──
+            // ── 实时速率：累计字节差 ÷ 时间（用 3 秒滑动窗口，避免忽高忽低）──
             let bytes = await OppoBridge.shared.fetchBytes()
             let now = Date()
             if bytes.rx > 0 || bytes.tx > 0 {
-                let dt = now.timeIntervalSince(lastSpeedAt)
-                if lastSpeedAt != .distantPast, dt > 0.3, dt < 10,
-                   bytes.rx >= lastSpeedRx, bytes.tx >= lastSpeedTx {
-                    // 字节差 ÷ 时间 = 真实速率
-                    let rxBps = (bytes.rx - lastSpeedRx) / dt
-                    let txBps = (bytes.tx - lastSpeedTx) / dt
-                    realtimeRx = rxBps * 8
-                    realtimeTx = txBps * 8
-                    v["speedRx"] = String(Int(rxBps))
-                    v["speedTx"] = String(Int(txBps))
+                speedSamples.append((now, bytes.rx, bytes.tx))
+                // 只保留最近 3 秒的样本
+                while speedSamples.count > 2,
+                      now.timeIntervalSince(speedSamples[0].t) > 3.0 {
+                    speedSamples.removeFirst()
                 }
-                lastSpeedRx = bytes.rx
-                lastSpeedTx = bytes.tx
-                lastSpeedAt = now
+
+                if let first = speedSamples.first, speedSamples.count >= 2 {
+                    let dt = now.timeIntervalSince(first.t)
+                    if dt > 0.8 {
+                        let rxBps = max(0, (bytes.rx - first.rx) / dt)
+                        let txBps = max(0, (bytes.tx - first.tx) / dt)
+                        realtimeRx = rxBps * 8
+                        realtimeTx = txBps * 8
+                        v["speedRx"] = String(Int(rxBps))
+                        v["speedTx"] = String(Int(txBps))
+                    }
+                }
             }
 
             status.raw = v
@@ -419,9 +428,7 @@ final class CpeStore: ObservableObject {
         todayTxDelta = 0
         lastOppoRx = 0
         lastOppoTx = 0
-        lastSpeedRx = 0
-        lastSpeedTx = 0
-        lastSpeedAt = .distantPast
+        speedSamples.removeAll()
         oppoSlowCache = [:]
         oppoSlowAt = .distantPast
         lastTodayTotal = 0
