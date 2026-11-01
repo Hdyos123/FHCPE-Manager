@@ -96,15 +96,22 @@ final class OppoBridge: NSObject, ObservableObject {
         }
 
         trace.removeAll()
-        pageLoaded = false
         loginToken += 1
         let myToken = loginToken
         log("开始加载 \(host)（会话 #\(myToken)）")
 
-        var req = URLRequest(url: url)
-        req.timeoutInterval = 30
-        req.cachePolicy = .reloadIgnoringLocalCacheData
-        wv.load(req)
+        // 如果 WebView 已经加载过同一地址，直接用当前状态（最快）
+        let alreadyLoaded = (wv.url?.host == host) && pageLoaded
+        pageLoaded = false
+        if alreadyLoaded {
+            log("WebView 已加载过 \(host)，直接检查状态")
+            pageLoaded = true          // 跳过 didFinish 等待
+        } else {
+            var req = URLRequest(url: url)
+            req.timeoutInterval = 20
+            req.cachePolicy = .useProtocolCachePolicy   // 用缓存，快很多
+            wv.load(req)
+        }
 
         // 不依赖 didFinish（OPPO 是 SPA，加载慢），主动轮询等待输入框
         // 注意：jsCall 在页面未就绪时可能返回 nil，必须记录否则看不出问题
@@ -112,12 +119,12 @@ final class OppoBridge: NSObject, ObservableObject {
 
         // 阶段一：等 didFinish（最多 20 秒）
         var waited = 0.0
-        while !pageLoaded && waited < 20 {
-            try? await Task.sleep(nanoseconds: 300_000_000)
+        while !pageLoaded && waited < 8 {
+            try? await Task.sleep(nanoseconds: 200_000_000)
             if loginToken != myToken { log("被新登录中断"); return false }
-            waited += 0.3
+            waited += 0.2
         }
-        log(pageLoaded ? "didFinish \(Int(waited))s" : "X didFinish 超时 20s")
+        log(pageLoaded ? "didFinish \(String(format: "%.1f", waited))s" : "didFinish 超时 8s，继续尝试")
 
         // 关键诊断：JS 引擎是否可用
         let jsOK = await selfTest()
@@ -127,10 +134,10 @@ final class OppoBridge: NSObject, ObservableObject {
             return false
         }
 
-        // 阶段二：轮询探测输入框（最多 15 秒）
+        // 阶段二：轮询探测（最多 12 秒）
         var lastReport = -1
-        for _ in 0..<30 {
-            try? await Task.sleep(nanoseconds: 500_000_000)
+        for _ in 0..<48 {
+            try? await Task.sleep(nanoseconds: 250_000_000)
             if loginToken != myToken { log("被新登录中断"); return false }
             let elapsed = Int(Date().timeIntervalSince(t0))
 
@@ -164,19 +171,29 @@ final class OppoBridge: NSObject, ObservableObject {
             }
 
             let inputs = o["inputs"] as? Int ?? 0
-            if elapsed / 5 != lastReport {
-                lastReport = elapsed / 5
-                log("\(elapsed)s: inputs=\(inputs) hash=\(o["hash"] ?? "?") body=\(o["body"] ?? 0)")
+            let hash = o["hash"] as? String ?? ""
+            let bodyLen = o["body"] as? Int ?? 0
+            if elapsed / 3 != lastReport {
+                lastReport = elapsed / 3
+                log("\(elapsed)s: inputs=\(inputs) hash=\(hash) body=\(bodyLen)")
             }
 
+            // ① 有登录表单 → 执行登录
             if inputs >= 2 {
-                log("页面就绪 (\(elapsed)s)")
+                log("检测到登录框 (\(elapsed)s)")
                 return await doLogin()
+            }
+
+            // ② 没有登录框，且 hash 不是 #/login → 已处于登录状态，直接通过
+            if inputs <= 1 && !hash.contains("login") && bodyLen > 3000 {
+                log("已是登录状态 (\(elapsed)s)，跳过登录")
+                ready = true
+                return true
             }
         }
 
         lastError = "页面加载超时，请确认连的是 OPPO CPE 的 Wi-Fi"
-        log("✗ 30 秒内未渲染出登录框")
+        log("✗ 12 秒内未能进入")
         return false
     }
 
@@ -334,6 +351,59 @@ final class OppoBridge: NSObject, ObservableObject {
         if let n = d["_deviceCount"] { d["deviceCount"] = n }
 
         return OppoParser.parseFromPairs(d)
+    }
+
+    /// 用 callAsyncJavaScript 直接等待 Promise，拿到累计字节数
+    /// 比"写全局变量 + 轮询读取"快得多，约 100ms
+    func fetchBytes() async -> (rx: Double, tx: Double) {
+        guard ready, let wv = webView else { return (0, 0) }
+
+        let js = """
+        var app = document.querySelector('#app');
+        var vm = app && app.__vue__;
+        var ax = null;
+        (function walk(v, d){
+          if (!v || d > 6 || ax) return;
+          if (v.$http) { ax = v.$http; return; }
+          (v.$children || []).forEach(function(c){ walk(c, d+1); });
+        })(vm, 0);
+        if (!ax) return '';
+        var r = await ax.post('/NetStats/GetStats', {});
+        var s = r && r.Stats && r.Stats[0];
+        if (!s) return '';
+        return JSON.stringify({rx: s.BytesReceived, tx: s.BytesSent});
+        """
+
+        return await withCheckedContinuation { (c: CheckedContinuation<(Double, Double), Never>) in
+            var done = false
+            let lock = NSLock()
+            let finish: ((Double, Double)) -> Void = { v in
+                lock.lock(); defer { lock.unlock() }
+                guard !done else { return }
+                done = true
+                c.resume(returning: v)
+            }
+
+            if #available(iOS 14.0, *) {
+                wv.callAsyncJavaScript(js,
+                                       arguments: [:],
+                                       in: nil,
+                                       in: .page) { result in
+                    guard let str = result.value as? String,
+                          let d = str.data(using: .utf8),
+                          let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                          let rx = o["rx"] as? NSNumber,
+                          let tx = o["tx"] as? NSNumber else {
+                        finish((0, 0)); return
+                    }
+                    finish((rx.doubleValue, tx.doubleValue))
+                }
+            } else {
+                finish((0, 0))
+            }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { finish((0, 0)) }
+        }
     }
 
     /// 只读取页面上的「实时上传/下载速率」
