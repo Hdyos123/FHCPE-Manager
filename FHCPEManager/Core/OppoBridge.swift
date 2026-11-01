@@ -345,7 +345,7 @@ final class OppoBridge: NSObject, ObservableObject {
             var box = els[i].parentElement;
             if (!box) continue;
             var txt = box.textContent || '';
-            var m = txt.match(/([0-9.]+)\s*([KMGT]?)bps/i);
+            var m = txt.match(/([0-9.]+)[ ]*([KMGT]?)bps/i);
             if (!m) continue;
             var val = parseFloat(m[1]);
             var unit = m[2].toUpperCase();
