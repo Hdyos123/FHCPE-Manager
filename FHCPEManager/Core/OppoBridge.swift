@@ -282,28 +282,34 @@ final class OppoBridge: NSObject, ObservableObject {
     func fetchDashboard() async -> [String: String] {
         guard ready else { return [:] }
 
-        // 只在 JS 侧取一次 innerText，就地提取需要的行，减少跨进程传输
-        // 分隔符用 ||| 和 ###，避免 Swift 字符串转义冲突
+        // 不用 innerText（触发全页重排，很慢）
+        // 改为遍历叶子节点，直接拿「标签 → 值」
         let body = """
         (function(){
-          var t = document.body.innerText;
-          if (!t) return '';
-          var lines = t.split(String.fromCharCode(10));
+          var want = {
+            'UL Data Rate':1,'DL Data Rate':1,'RSRP':1,'RSRQ':1,'SINR':1,
+            'PCI':1,'Frequency Band':1,'Network Status':1,'Carrier Aggregation':1,
+            'Total':1,'Upload':1,'Download':1,'Device Name':1,'Serial Number':1,
+            'Software Version':1,'Hardware Version':1,'Manufacturer Info':1,
+            'System Uptime':1,'CPU Usage':1,'Memory Usage':1,
+            'SSID 2.4 GHz':1,'SSID 5 GHz':1,'PLMN':1
+          };
           var out = [];
-          var want = {};
-          ['UL Data Rate','DL Data Rate','RSRP','RSRQ','SINR','PCI',
-           'Frequency Band','Network Status','Carrier Aggregation',
-           'Total','Upload','Download','Device Name','Serial Number',
-           'Software Version','Hardware Version','Manufacturer Info',
-           'System Uptime','CPU Usage','Memory Usage',
-           'SSID 2.4 GHz','SSID 5 GHz','PLMN'].forEach(function(k){ want[k]=1; });
-          for (var i = 0; i < lines.length; i++) {
-            var l = lines[i].trim();
-            if (want[l] && i + 1 < lines.length) {
-              out.push(l + '###' + lines[i+1].trim());
-            }
+          var els = document.querySelectorAll('div, span, p, td, dd, label');
+          for (var i = 0; i < els.length; i++) {
+            var el = els[i];
+            if (el.children.length > 0) continue;
+            var t = (el.textContent || '').trim();
+            if (!want[t]) continue;
+            var box = el.parentElement;
+            if (!box) continue;
+            var full = (box.textContent || '').trim();
+            var v = full.substring(t.length).trim();
+            if (v) out.push(t + '###' + v);
           }
-          var m = t.match(/total of ([0-9]+) devices?/);
+          // 设备总数
+          var all = document.body ? (document.body.textContent || '') : '';
+          var m = all.match(/total of ([0-9]+) devices?/);
           if (m) out.push('_deviceCount###' + m[1]);
           return out.join('|||');
         })()
@@ -331,31 +337,48 @@ final class OppoBridge: NSObject, ObservableObject {
     }
 
     /// 只读取页面上的「实时上传/下载速率」
-    /// 比 innerText 快得多：只查特定文本节点，不触发全页重排
+    /// 首次扫描后缓存元素引用，之后只读 textContent（很快）
     func fetchSpeeds() async -> (rx: Double, tx: Double) {
         guard ready else { return (0, 0) }
 
         let js = """
         (function(){
-          var result = {dl: 0, ul: 0};
-          var els = document.querySelectorAll('div, span, p, td, dd');
-          for (var i = 0; i < els.length; i++) {
-            var t = (els[i].textContent || '').trim();
-            if (t !== 'DL Data Rate' && t !== 'UL Data Rate') continue;
-            var box = els[i].parentElement;
-            if (!box) continue;
+          function parseOne(el){
+            if (!el) return 0;
+            var box = el.parentElement;
+            if (!box) return 0;
             var txt = box.textContent || '';
             var m = txt.match(/([0-9.]+)[ ]*([KMGT]?)bps/i);
-            if (!m) continue;
+            if (!m) return -1;
             var val = parseFloat(m[1]);
-            var unit = m[2].toUpperCase();
-            if (unit === 'K') val /= 1000;
-            else if (unit === 'G') val *= 1000;
-            else if (unit === 'T') val *= 1000000;
-            if (t === 'DL Data Rate') result.dl = val;
-            else result.ul = val;
+            var u = (m[2] || '').toUpperCase();
+            if (u === 'K') val /= 1000;
+            else if (u === 'G') val *= 1000;
+            else if (u === 'T') val *= 1000000;
+            return val;
           }
-          return JSON.stringify(result);
+
+          // 有缓存且仍能解析，直接用
+          if (window.__spdEls && window.__spdEls.dl && window.__spdEls.ul) {
+            var d1 = parseOne(window.__spdEls.dl);
+            var u1 = parseOne(window.__spdEls.ul);
+            if (d1 >= 0 && u1 >= 0) {
+              return JSON.stringify({dl: d1, ul: u1});
+            }
+          }
+
+          // 重新扫描
+          var dlEl = null, ulEl = null;
+          var els = document.querySelectorAll('div, span, p, td, dd, label');
+          for (var i = 0; i < els.length; i++) {
+            if (els[i].children.length > 0) continue;   // 只查叶子节点
+            var t = (els[i].textContent || '').trim();
+            if (t === 'DL Data Rate') dlEl = els[i];
+            else if (t === 'UL Data Rate') ulEl = els[i];
+            if (dlEl && ulEl) break;
+          }
+          window.__spdEls = {dl: dlEl, ul: ulEl};
+          return JSON.stringify({dl: parseOne(dlEl), ul: parseOne(ulEl)});
         })()
         """
 
@@ -364,8 +387,8 @@ final class OppoBridge: NSObject, ObservableObject {
               let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
             return (0, 0)
         }
-        let dl = (o["dl"] as? NSNumber)?.doubleValue ?? 0
-        let ul = (o["ul"] as? NSNumber)?.doubleValue ?? 0
+        let dl = max(0, (o["dl"] as? NSNumber)?.doubleValue ?? 0)
+        let ul = max(0, (o["ul"] as? NSNumber)?.doubleValue ?? 0)
         return (dl, ul)
     }
 
