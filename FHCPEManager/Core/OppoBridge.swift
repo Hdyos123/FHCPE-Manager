@@ -330,6 +330,45 @@ final class OppoBridge: NSObject, ObservableObject {
         return OppoParser.parseFromPairs(d)
     }
 
+    /// 只读取页面上的「实时上传/下载速率」
+    /// 比 innerText 快得多：只查特定文本节点，不触发全页重排
+    func fetchSpeeds() async -> (rx: Double, tx: Double) {
+        guard ready else { return (0, 0) }
+
+        let js = """
+        (function(){
+          var result = {dl: 0, ul: 0};
+          var els = document.querySelectorAll('div, span, p, td, dd');
+          for (var i = 0; i < els.length; i++) {
+            var t = (els[i].textContent || '').trim();
+            if (t !== 'DL Data Rate' && t !== 'UL Data Rate') continue;
+            var box = els[i].parentElement;
+            if (!box) continue;
+            var txt = box.textContent || '';
+            var m = txt.match(/([0-9.]+)\s*([KMGT]?)bps/i);
+            if (!m) continue;
+            var val = parseFloat(m[1]);
+            var unit = m[2].toUpperCase();
+            if (unit === 'K') val /= 1000;
+            else if (unit === 'G') val *= 1000;
+            else if (unit === 'T') val *= 1000000;
+            if (t === 'DL Data Rate') result.dl = val;
+            else result.ul = val;
+          }
+          return JSON.stringify(result);
+        })()
+        """
+
+        guard let str = await evalDirect(js, timeout: 2),
+              let d = str.data(using: .utf8),
+              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
+            return (0, 0)
+        }
+        let dl = (o["dl"] as? NSNumber)?.doubleValue ?? 0
+        let ul = (o["ul"] as? NSNumber)?.doubleValue ?? 0
+        return (dl, ul)
+    }
+
     /// 调用 NetStats/GetStats 拿精确流量与实时速率
     /// 返回：BytesReceived / BytesSent / RateReceived / RateSent
     func fetchStats() async -> [String: Any] {
