@@ -308,14 +308,6 @@ final class CpeStore: ObservableObject {
                 let d = await OppoBridge.shared.fetchDashboard()
                 if !d.isEmpty {
                     v = OppoParser.normalize(d)
-                    // 页面里的速率作为兜底
-                    // 注意：normalize 里 speedRx 存的是「字节/秒」，要 ×8 才是 bit/s
-                    if let r = v["speedRx"], let n = Double(r), n > 0 {
-                        realtimeRx = n * 8
-                    }
-                    if let t = v["speedTx"], let m = Double(t), m > 0 {
-                        realtimeTx = m * 8
-                    }
                     oppoSlowCache = v
                     oppoSlowAt = Date()
                 }
@@ -349,14 +341,13 @@ final class CpeStore: ObservableObject {
                 lastOppoTx = txB
             }
 
-            // 接口值优先（更精确），但要 > 0 才采用
-            if let rrx = st["rateRx"] as? NSNumber, rrx.doubleValue > 0 {
-                realtimeRx = rrx.doubleValue * 8
-                v["speedRx"] = String(Int(rrx.doubleValue))
-            }
-            if let rtx = st["rateTx"] as? NSNumber, rtx.doubleValue > 0 {
-                realtimeTx = rtx.doubleValue * 8
-                v["speedTx"] = String(Int(rtx.doubleValue))
+            // 速率：直接读页面上的 UL/DL Data Rate（接口 Rate 字段不准）
+            let sp = await OppoBridge.shared.fetchSpeeds()
+            if sp.rx > 0 || sp.tx > 0 {
+                realtimeRx = sp.rx * 1_000_000      // Mbps → bit/s
+                realtimeTx = sp.tx * 1_000_000
+                v["speedRx"] = String(Int(sp.rx * 1_000_000 / 8))
+                v["speedTx"] = String(Int(sp.tx * 1_000_000 / 8))
             }
 
             status.raw = v
