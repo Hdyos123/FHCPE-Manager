@@ -554,12 +554,26 @@ final class CpeStore: ObservableObject {
         return ok
     }
 
+    /// 重启设备：按厂商分流
     func reboot() async -> Bool {
-        if useNative {
-            do { try await CpeNativeAPI.shared.runCommand("REBOOT_WEB"); return true }
-            catch { return false }
+        if isOppo {
+            return await OppoBridge.shared.reboot()
         }
-        return await bridge.runCommand("REBOOT_WEB")
+
+        // 烽火：优先原生 API，失败再走 WebView 桥
+        if useNative {
+            do {
+                try await CpeNativeAPI.shared.runCommand("REBOOT_WEB")
+                return true
+            } catch {
+                diagLog += "原生重启失败，尝试桥接…\n"
+            }
+        }
+        if bridge.ready {
+            return await bridge.runCommand("REBOOT_WEB")
+        }
+        diagLog += "烽火未连接，无法重启\n"
+        return false
     }
 
     /// 频段锁定
