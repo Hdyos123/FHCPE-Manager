@@ -27,6 +27,11 @@ final class CpeStore: ObservableObject {
     @Published var isLoggedIn = false
     /// 当前连接的设备
     @Published var activeProfile: CpeProfile?
+
+    /// 检测到另一台可用设备（用于提醒切换）
+    @Published var detectedProfile: CpeProfile?
+    /// 当前设备是否已断开（连续探测失败）
+    @Published var currentOffline = false
     var isOppo: Bool { activeProfile?.vendor == .oppo }
     @Published var isLoading = false
     @Published var errorText: String?
@@ -157,6 +162,9 @@ final class CpeStore: ObservableObject {
         lastOppoRx = 0
         lastOppoTx = 0
         speedSamples.removeAll()
+        detectedProfile = nil
+        currentOffline = false
+        offlineStreak = 0
         oppoSlowCache = [:]
         oppoSlowAt = .distantPast
         lastTodayTotal = 0
@@ -429,6 +437,9 @@ final class CpeStore: ObservableObject {
         lastOppoRx = 0
         lastOppoTx = 0
         speedSamples.removeAll()
+        detectedProfile = nil
+        currentOffline = false
+        offlineStreak = 0
         oppoSlowCache = [:]
         oppoSlowAt = .distantPast
         lastTodayTotal = 0
@@ -554,6 +565,80 @@ final class CpeStore: ObservableObject {
         return ok
     }
 
+    // MARK: - 网络切换监听
+
+    private var watchTask: Task<Void, Never>?
+    private var offlineStreak = 0
+
+    /// 开始监听：每 12 秒确认当前设备是否还在，以及是否切到了别的设备
+    func startWatching() {
+        watchTask?.cancel()
+        offlineStreak = 0
+        watchTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 12_000_000_000)
+                guard !Task.isCancelled else { return }
+                await self?.checkDeviceChange()
+            }
+        }
+    }
+
+    func stopWatching() {
+        watchTask?.cancel()
+        watchTask = nil
+        detectedProfile = nil
+        currentOffline = false
+        offlineStreak = 0
+    }
+
+    private func checkDeviceChange() async {
+        guard isLoggedIn, let cur = activeProfile else { return }
+        guard !cur.host.isEmpty else { return }
+
+        // 当前设备还在？
+        if await CpeDetector.reachable(cur.host) {
+            offlineStreak = 0
+            if currentOffline { currentOffline = false }
+            return
+        }
+
+        offlineStreak += 1
+        guard offlineStreak >= 2 else { return }   // 连续 2 次（约 24 秒）才认定断开
+        currentOffline = true
+
+        // 找其它已保存的设备
+        for p in ProfileStore.loadAll() where p.id != cur.id && !p.host.isEmpty {
+            if await CpeDetector.reachable(p.host) {
+                if detectedProfile?.id != p.id {
+                    detectedProfile = p
+                    toast("检测到 \(p.displayTitle)，是否切换？", kind: .info)
+                }
+                return
+            }
+        }
+    }
+
+    /// 手动切到检测到的设备
+    func switchTo(_ p: CpeProfile) async {
+        detectedProfile = nil
+        offlineStreak = 0
+        currentOffline = false
+        stopPolling()
+        let ok = await login(profile: p)
+        if ok {
+            ProfileStore.activeID = p.id
+            startPolling()
+            startWatching()
+            toast("已切换到 " + p.displayTitle, kind: .success)
+        } else {
+            toast(errorText ?? "切换失败", kind: .error)
+        }
+    }
+
+    func dismissDetected() {
+        detectedProfile = nil
+    }
+
     /// 重启设备：按厂商分流
     func reboot() async -> Bool {
         if isOppo {
@@ -631,6 +716,7 @@ final class CpeStore: ObservableObject {
     func startPolling(force: Bool = true) {
         if !force, pollTask != nil, !(pollTask?.isCancelled ?? true) { return }
         stopPolling()
+        startWatching()
         lastTick = Date()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -654,6 +740,12 @@ final class CpeStore: ObservableObject {
     func stopPolling() {
         pollTask?.cancel()
         pollTask = nil
+    }
+
+    /// 完全断开（退出登录/切设备时用）
+    func teardown() {
+        stopPolling()
+        stopWatching()
     }
 
     /// 从后台回到前台：重建会话并立即刷新
