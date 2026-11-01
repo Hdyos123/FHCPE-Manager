@@ -20,9 +20,6 @@ final class CpeStore: ObservableObject {
     /// OPPO 慢变数据缓存（信号/小区/设备），避免每秒触发页面重排
     private var oppoSlowCache: [String: String] = [:]
     private var oppoSlowAt: Date = .distantPast
-    /// OPPO 速率接口缓存（避免 0.5 秒间隔时重复请求）
-    private var oppoStatsCache: [String: Any] = [:]
-    private var oppoStatsAt: Date = .distantPast
     private let oppoSlowInterval: TimeInterval = 5
     @Published var smsList: [CpeSms] = []
     @Published var isLoggedIn = false
@@ -302,7 +299,7 @@ final class CpeStore: ObservableObject {
     func fetchStatus() async {
         // OPPO 设备：走 WebView 桥接，解析首页文本
         if isOppo {
-            // ── 慢变数据（信号/小区/设备信息）：10 秒一次 ──
+            // ── 慢变数据（信号/小区/流量）：每 5 秒一次 ──
             var v = oppoSlowCache
             if Date().timeIntervalSince(oppoSlowAt) > oppoSlowInterval || v.isEmpty {
                 let d = await OppoBridge.shared.fetchDashboard()
@@ -310,38 +307,21 @@ final class CpeStore: ObservableObject {
                     v = OppoParser.normalize(d)
                     oppoSlowCache = v
                     oppoSlowAt = Date()
+
+                    // 流量增量（页面累计值，单位字节）
+                    let rxB = Double(v["monthRx"] ?? "") ?? 0
+                    let txB = Double(v["monthTx"] ?? "") ?? 0
+                    if lastOppoRx > 0, rxB > lastOppoRx {
+                        todayRxDelta += rxB - lastOppoRx
+                        todayTxDelta += max(0, txB - lastOppoTx)
+                        trafficUpdatedAt = Date()
+                    }
+                    lastOppoRx = rxB
+                    lastOppoTx = txB
                 }
             }
 
-            // ── 快变数据（速率/流量）：每秒取一次，但避免重复调用 ──
-            var st: [String: Any] = [:]
-            if Date().timeIntervalSince(oppoStatsAt) >= 0.9 {
-                st = await OppoBridge.shared.fetchStats()
-                if !st.isEmpty {
-                    oppoStatsCache = st
-                    oppoStatsAt = Date()
-                }
-            } else {
-                st = oppoStatsCache
-            }
-            if let rx = st["rx"] as? NSNumber, let tx = st["tx"] as? NSNumber {
-                let rxB = rx.doubleValue, txB = tx.doubleValue
-
-                v["monthRx"] = String(Int(rxB))
-                v["monthTx"] = String(Int(txB))
-                v["monthTotal"] = String(Int(rxB + txB))
-                v["todayTotal"] = v["monthTotal"]
-
-                if lastOppoRx > 0, rxB > lastOppoRx {
-                    todayRxDelta += rxB - lastOppoRx
-                    todayTxDelta += max(0, txB - lastOppoTx)
-                    trafficUpdatedAt = Date()
-                }
-                lastOppoRx = rxB
-                lastOppoTx = txB
-            }
-
-            // 速率：直接读页面上的 UL/DL Data Rate（接口 Rate 字段不准）
+            // ── 实时速率：每次轮询都读（轻量 DOM 查询，约 50ms）──
             let sp = await OppoBridge.shared.fetchSpeeds()
             if sp.rx > 0 || sp.tx > 0 {
                 realtimeRx = sp.rx * 1_000_000      // Mbps → bit/s
