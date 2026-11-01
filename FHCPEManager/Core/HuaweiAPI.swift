@@ -128,31 +128,49 @@ final class HuaweiAPI {
         lastErrorText = ""
 
         // ① 会话与令牌
-        let ses = try await rawRequest("GET", "/api/webserver/SesTokInfo", body: nil)
-        if let s = ses.text("SesInfo") {
-            sessionCookie = s
-        } else {
-            throw HuaweiError.noSession
-        }
-        token = ses.text("TokInfo") ?? ""
+        try await refreshToken()
 
         // ② challenge
         let firstNonce = Self.randomNonce()
-        let challengeBody = "<request><username>\(user)</username><firstnonce>\(firstNonce)</firstnonce><mode>1</mode></request>"
-        let chal = try await rawRequest("POST", "/api/user/challenge_login", body: challengeBody)
+        let challengeBody = "<request><username>\(Self.escape(user))</username>"
+            + "<firstnonce>\(firstNonce)</firstnonce><mode>1</mode></request>"
 
-        guard let saltB64 = chal.text("salt"),
+        var chal = try await rawRequest("POST", "/api/user/challenge_login", body: challengeBody)
+        if let err = chal.find("error"), let c = err.text("code"), c != "0" {
+            // 会话失效 → 重取令牌再试一次
+            if c == "125002" || c == "125003" || c == "125001" {
+                try await refreshToken()
+                chal = try await rawRequest("POST", "/api/user/challenge_login", body: challengeBody)
+            }
+        }
+        if let err = chal.find("error"), let c = err.text("code"), c != "0" {
+            let m = err.text("message") ?? ""
+            throw HuaweiError.loginFailed("挑战阶段返回 \(c) \(m)")
+        }
+
+        guard let saltRaw = chal.text("salt"),
               let iterStr = chal.text("iterations"),
               let serverNonce = chal.text("servernonce"),
               let iterations = Int(iterStr) else {
-            // 固件可能不支持 SCRAM，退回旧式登录
             try await legacyLogin(user: user, password: password)
             return
         }
 
-        // ③ 计算 client proof
-        guard let salt = Data(base64Encoded: saltB64) else { throw HuaweiError.parse }
+        // salt 可能是 hex（64 字符）也可能是 base64
+        let salt: Data
+        if saltRaw.count == 64, saltRaw.allSatisfy({ $0.isHexDigit }),
+           let d = Self.hexToData(saltRaw) {
+            salt = d
+        } else if let d = Data(base64Encoded: saltRaw) {
+            salt = d
+        } else {
+            throw HuaweiError.parse
+        }
 
+        // 关键：认证前必须刷新一次令牌，否则设备返回 125003
+        try await refreshToken()
+
+        // ③ 计算 client proof
         let salted = Self.pbkdf2(password: password, salt: salt, iterations: iterations, keyLen: 32)
         let clientKey = Self.hmac(salted, "Client Key")
         let storedKey = Self.sha256(clientKey)
@@ -162,16 +180,54 @@ final class HuaweiAPI {
         let proofB64 = proof.base64EncodedString()
 
         // ④ 认证
-        let authBody = "<request><clientproof>\(proofB64)</clientproof><finalnonce>\(serverNonce)</finalnonce></request>"
+        let authBody = "<request><clientproof>\(proofB64)</clientproof>"
+            + "<finalnonce>\(serverNonce)</finalnonce></request>"
         let auth = try await rawRequest("POST", "/api/user/authentication_login", body: authBody)
-        try Self.throwIfError(auth)
+
+        if let err = auth.find("error"), let c = err.text("code"), c != "0" {
+            let msg = err.text("message") ?? ""
+            let remain = err.text("remaincount")
+            let wait = err.text("tobelockedtime")
+
+            var hint = ""
+            switch c {
+            case "108006", "108001", "108002":
+                hint = "账号或密码不正确"
+                if let r = remain { hint += "，还可再试 \(r) 次" }
+                if let w = wait, w != "0" { hint += "。设备已锁定 \(w) 分钟" }
+            case "108003":
+                hint = "该账号已登录，请先在其它设备退出"
+            case "116001":
+                hint = "登录已过期，请重试"
+            case "125002", "125003":
+                hint = "会话失效，请重试"
+            default:
+                hint = msg.isEmpty ? "返回码 \(c)" : msg
+            }
+            throw HuaweiError.loginFailed(hint)
+        }
 
         loggedIn = true
-        // 认证后通常要重新取一次令牌
+
+        // 认证后再取一次令牌（设备可能轮换）
         if let ses2 = try? await rawRequest("GET", "/api/webserver/SesTokInfo", body: nil) {
-            if let s = ses2.text("SesInfo") { sessionCookie = s }
+            if let s = ses2.text("SesInfo") {
+                let c = Self.cookieOnly(s)
+                if !c.isEmpty { sessionCookie = c }
+            }
             if let t = ses2.text("TokInfo") { token = t }
         }
+    }
+
+    /// 重新获取会话 Cookie 与 CSRF token
+    private func refreshToken() async throws {
+        let ses = try await rawRequest("GET", "/api/webserver/SesTokInfo", body: nil)
+        if let s = ses.text("SesInfo") {
+            let c = Self.cookieOnly(s)
+            if !c.isEmpty { sessionCookie = c }
+        }
+        if let t = ses.text("TokInfo") { token = t }
+        if sessionCookie.isEmpty { throw HuaweiError.noSession }
     }
 
     /// 老固件的明文登录（RSA 加密密码）
@@ -192,16 +248,36 @@ final class HuaweiAPI {
         req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)", forHTTPHeaderField: "User-Agent")
         req.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
         req.setValue("application/x-www-form-urlencoded; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+        req.setValue("http://\(host)/html/index.html", forHTTPHeaderField: "Referer")
+        req.setValue("http://\(host)", forHTTPHeaderField: "Origin")
         if !token.isEmpty {
             req.setValue(token, forHTTPHeaderField: "__RequestVerificationToken")
         }
         if !sessionCookie.isEmpty {
             req.setValue(sessionCookie, forHTTPHeaderField: "Cookie")
         }
-        if let b = body { req.httpBody = b.data(using: .utf8) }
+        if let b = body {
+            // 华为后端对带 XML 声明的报文兼容性更好
+            let full = b.hasPrefix("<?xml") ? b : "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" + b
+            req.httpBody = full.data(using: .utf8)
+        }
 
         let (data, resp) = try await session.data(for: req)
-        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        let http = resp as? HTTPURLResponse
+        let code = http?.statusCode ?? 0
+
+        // 设备可能通过 Set-Cookie 下发新会话，必须跟上
+        if let headers = http?.allHeaderFields {
+            for (k, v) in headers {
+                let key = (k as? String) ?? "\(k)"
+                if key.lowercased() == "set-cookie",
+                   let raw = v as? String {
+                    let cookie = Self.cookieOnly(raw)
+                    if !cookie.isEmpty { sessionCookie = cookie }
+                }
+            }
+        }
+
         guard code == 200 else { throw HuaweiError.http(code) }
 
         let parser = XMLParser(data: data)
@@ -557,6 +633,27 @@ final class HuaweiAPI {
     }
 
     // MARK: 工具
+
+    /// 从 "SessionID=abc;Path=/;HttpOnly" 里只取 "SessionID=abc"
+    static func cookieOnly(_ raw: String) -> String {
+        let first = raw.split(separator: ";").first.map(String.init) ?? raw
+        let t = first.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.contains("=") ? t : ""
+    }
+
+    /// 十六进制字符串 → Data
+    static func hexToData(_ s: String) -> Data? {
+        guard s.count % 2 == 0 else { return nil }
+        var d = Data(capacity: s.count / 2)
+        var idx = s.startIndex
+        while idx < s.endIndex {
+            let nxt = s.index(idx, offsetBy: 2)
+            guard let b = UInt8(s[idx..<nxt], radix: 16) else { return nil }
+            d.append(b)
+            idx = nxt
+        }
+        return d
+    }
 
     static func randomNonce() -> String {
         var bytes = [UInt8](repeating: 0, count: 32)
