@@ -127,8 +127,11 @@ final class HuaweiAPI {
         loggedIn = false
         lastErrorText = ""
 
-        // ① 会话与令牌
+        // ① 先确认没被锁定，避免白白消耗尝试次数
         try await refreshToken()
+        if let lock = try? await lockState(), lock.locked {
+            throw HuaweiError.loginFailed("设备已锁定，请等待 \(max(1, lock.minutes)) 分钟后再试")
+        }
 
         // ② challenge
         let firstNonce = Self.randomNonce()
@@ -144,8 +147,7 @@ final class HuaweiAPI {
             }
         }
         if let err = chal.find("error"), let c = err.text("code"), c != "0" {
-            let m = err.text("message") ?? ""
-            throw HuaweiError.loginFailed("挑战阶段返回 \(c) \(m)")
+            throw HuaweiError.loginFailed(Self.hintFor(chal, code: c))
         }
 
         guard let saltRaw = chal.text("salt"),
@@ -185,26 +187,7 @@ final class HuaweiAPI {
         let auth = try await rawRequest("POST", "/api/user/authentication_login", body: authBody)
 
         if let err = auth.find("error"), let c = err.text("code"), c != "0" {
-            let msg = err.text("message") ?? ""
-            let remain = err.text("remaincount")
-            let wait = err.text("tobelockedtime")
-
-            var hint = ""
-            switch c {
-            case "108006", "108001", "108002":
-                hint = "账号或密码不正确"
-                if let r = remain { hint += "，还可再试 \(r) 次" }
-                if let w = wait, w != "0" { hint += "。设备已锁定 \(w) 分钟" }
-            case "108003":
-                hint = "该账号已登录，请先在其它设备退出"
-            case "116001":
-                hint = "登录已过期，请重试"
-            case "125002", "125003":
-                hint = "会话失效，请重试"
-            default:
-                hint = msg.isEmpty ? "返回码 \(c)" : msg
-            }
-            throw HuaweiError.loginFailed(hint)
+            throw HuaweiError.loginFailed(Self.hintFor(auth, code: c))
         }
 
         loggedIn = true
@@ -217,6 +200,15 @@ final class HuaweiAPI {
             }
             if let t = ses2.text("TokInfo") { token = t }
         }
+    }
+
+    /// 查询锁定状态
+    func lockState() async throws -> (locked: Bool, minutes: Int) {
+        let n = try await rawRequest("GET", "/api/user/state-login", body: nil)
+        let locked = (n.text("lockstatus") ?? "0") == "1"
+        let waitStr = n.text("remainwaittime") ?? "0"
+        let minutes = Int(waitStr) ?? 0
+        return (locked, minutes)
     }
 
     /// 重新获取会话 Cookie 与 CSRF token
@@ -639,6 +631,34 @@ final class HuaweiAPI {
         let first = raw.split(separator: ";").first.map(String.init) ?? raw
         let t = first.trimmingCharacters(in: .whitespacesAndNewlines)
         return t.contains("=") ? t : ""
+    }
+
+    /// 把设备错误码翻译成中文
+    static func hintFor(_ node: XMLNode, code: String) -> String {
+        let wait = node.find("error")?.text("tobelockedtime")
+            ?? node.find("error")?.text("remainwaittime")
+        let remain = node.find("error")?.text("remaincount")
+
+        switch code {
+        case "108006", "108001", "108002":
+            var h = "账号或密码不正确"
+            if let r = remain { h += "，还可再试 \(r) 次" }
+            if let w = wait, w != "0" { h += "。设备已锁定 \(w) 分钟" }
+            return h
+        case "108007":
+            var h = "密码错误次数过多，设备已锁定"
+            if let w = wait, w != "0" { h += "，请等待 \(w) 分钟" }
+            return h
+        case "108003":
+            return "该账号已登录，请先在其它设备退出"
+        case "116001":
+            return "登录已过期，请重试"
+        case "125002", "125003":
+            return "会话失效，请重试"
+        default:
+            let m = node.find("error")?.text("message") ?? ""
+            return m.isEmpty ? "设备返回错误 \(code)" : "\(m)（\(code)）"
+        }
     }
 
     /// 十六进制字符串 → Data
