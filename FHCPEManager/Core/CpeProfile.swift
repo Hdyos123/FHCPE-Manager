@@ -4,11 +4,13 @@ import Foundation
 enum CpeVendor: String, CaseIterable, Codable {
     case fiberhome = "fiberhome"
     case oppo      = "oppo"
+    case huawei    = "huawei"
 
     var displayName: String {
         switch self {
         case .fiberhome: return "烽火"
         case .oppo:      return "OPPO"
+        case .huawei:    return "华为"
         }
     }
 
@@ -16,6 +18,7 @@ enum CpeVendor: String, CaseIterable, Codable {
         switch self {
         case .fiberhome: return "192.168.8.1"
         case .oppo:      return "192.168.0.1"
+        case .huawei:    return "192.168.8.1"
         }
     }
 
@@ -23,6 +26,7 @@ enum CpeVendor: String, CaseIterable, Codable {
         switch self {
         case .fiberhome: return "superadmin"
         case .oppo:      return "admin"
+        case .huawei:    return "admin"
         }
     }
 
@@ -30,6 +34,7 @@ enum CpeVendor: String, CaseIterable, Codable {
         switch self {
         case .fiberhome: return "LG6121F 等烽火 5G CPE"
         case .oppo:      return "OPPO 5G CPE T1 / T2 系列"
+        case .huawei:    return "华为 5G CPE / 移动路由"
         }
     }
 
@@ -37,6 +42,7 @@ enum CpeVendor: String, CaseIterable, Codable {
         switch self {
         case .fiberhome: return "antenna.radiowaves.left.and.right"
         case .oppo:      return "wave.3.right"
+        case .huawei:    return "wifi.router"
         }
     }
 
@@ -45,6 +51,7 @@ enum CpeVendor: String, CaseIterable, Codable {
         switch self {
         case .fiberhome: return "BrandFiberHome"
         case .oppo:      return "BrandOPPO"
+        case .huawei:    return "BrandHuawei"
         }
     }
 
@@ -53,6 +60,7 @@ enum CpeVendor: String, CaseIterable, Codable {
         switch self {
         case .fiberhome: return false
         case .oppo:      return true
+        case .huawei:    return false
         }
     }
 }
