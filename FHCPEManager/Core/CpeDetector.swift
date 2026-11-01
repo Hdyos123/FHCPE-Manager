@@ -67,6 +67,11 @@ enum CpeDetector {
 
     // MARK: - 底层
 
+    /// 检测某个地址是否可达（供设备切换监听使用）
+    static func reachable(_ host: String) async -> Bool {
+        await isReachable(host)
+    }
+
     private static func isReachable(_ host: String) async -> Bool {
         await withCheckedContinuation { cont in
             var done = false
