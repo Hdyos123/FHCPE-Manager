@@ -5,7 +5,7 @@ enum CpeDetector {
 
     /// 可能的网关地址（按常见程度排序）
     static let candidateHosts = [
-        "192.168.8.1",      // 烽火
+        "192.168.8.1",      // 烽火 / 华为（靠特征接口区分）
         "192.168.0.1",      // OPPO
         "192.168.1.1",      // 通用
         "192.168.4.1",      // 热点模式
@@ -40,6 +40,12 @@ enum CpeDetector {
     static func probe(_ host: String) async -> Result? {
         guard await isReachable(host) else { return nil }
 
+        // 华为：SesTokInfo 返回 TokInfo
+        if let body = await fetch("http://\(host)/api/webserver/SesTokInfo"),
+           body.contains("TokInfo") || body.contains("SesInfo") {
+            return Result(host: host, vendor: .huawei, evidence: "华为会话接口")
+        }
+
         // OPPO：GetPemKey 返回 RSA 公钥
         if let body = await fetch("http://\(host)/api/webCgi/GetPemKey"), body.contains("pem") {
             return Result(host: host, vendor: .oppo, evidence: "OPPO 公钥接口")
@@ -59,6 +65,9 @@ enum CpeDetector {
             }
             if lower.contains("fiberhome") || html.contains("烽火") {
                 return Result(host: host, vendor: .fiberhome, evidence: "首页标识")
+            }
+            if lower.contains("huawei") || html.contains("华为") {
+                return Result(host: host, vendor: .huawei, evidence: "首页标识")
             }
         }
 
