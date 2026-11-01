@@ -35,6 +35,20 @@ struct HomeView: View {
             }
             .ignoresSafeArea(edges: .bottom)
             .navigationBarHidden(true)
+            // 设备变化提醒（Wi-Fi 切换后出现）
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if let p = store.detectedProfile {
+                    switchBanner(p)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 6)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                } else if store.currentOffline {
+                    offlineBanner
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 6)
+                }
+            }
+            .animation(.spring(response: 0.35, dampingFraction: 0.85), value: store.detectedProfile?.id)
             .refreshable { await store.fetchAll() }
             .onAppear {
                 // 从其它 Tab 切回首页时补一次刷新（不重启轮询，交给 scenePhase 管理）
@@ -148,7 +162,7 @@ struct HomeView: View {
                     showSwitcher = true
                 } label: {
                     HStack(spacing: 4) {
-                        Text(store.activeProfile?.displayTitle ?? s.deviceModel)
+                        Text(deviceTitle)
                             .font(.system(size: 13, weight: .bold))
                             .lineLimit(1)
                         Image(systemName: "chevron.down")
@@ -778,6 +792,89 @@ struct HomeView: View {
     }
 
     // MARK: - 流量
+
+    /// 检测到另一台设备 → 提醒切换
+    private func switchBanner(_ p: CpeProfile) -> some View {
+        HStack(spacing: 9) {
+            Image(systemName: "wifi.exclamationmark")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.orange)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("检测到 \(p.displayTitle)")
+                    .font(.system(size: 13, weight: .semibold))
+                Text(p.host + " · 是否切换？")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 4)
+
+            Button("忽略") {
+                Haptic.light()
+                store.dismissDetected()
+            }
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            .buttonStyle(.plain)
+
+            Button("切换") {
+                Haptic.medium()
+                Task { await store.switchTo(p) }
+            }
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(Color.blue))
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(.ultraThinMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.orange.opacity(0.35), lineWidth: 1)
+        )
+    }
+
+    /// 当前设备断开
+    private var offlineBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "wifi.slash")
+                .font(.system(size: 13))
+                .foregroundStyle(.red)
+            Text("当前设备已断开，请检查 Wi-Fi")
+                .font(.system(size: 12.5))
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(.ultraThinMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.red.opacity(0.25), lineWidth: 1)
+        )
+    }
+
+    /// 顶栏设备名：
+    /// 烽火显示真实型号（LG6121F），OPPO 显示简称（OPPO）
+    private var deviceTitle: String {
+        if store.isOppo {
+            return store.activeProfile?.displayTitle ?? "OPPO"
+        }
+        // 烽火：优先显示设备型号
+        let model = s.deviceModel
+        if !model.isEmpty && model != "CPE" { return model }
+        return store.activeProfile?.displayTitle ?? "CPE"
+    }
 
     /// 在线设备数：烽火用 hosts，OPPO 用页面识别到的数量
     private var onlineDeviceCount: Int {
