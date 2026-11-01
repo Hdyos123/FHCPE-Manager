@@ -17,6 +17,10 @@ final class CpeStore: ObservableObject {
     /// OPPO 累计流量基准（字节）
     private var lastOppoRx: Double = 0
     private var lastOppoTx: Double = 0
+    /// 速率采样用的独立变量（与流量统计分开）
+    private var lastSpeedRx: Double = 0
+    private var lastSpeedTx: Double = 0
+    private var lastSpeedAt: Date = .distantPast
     /// OPPO 慢变数据缓存（信号/小区/设备），避免每秒触发页面重排
     private var oppoSlowCache: [String: String] = [:]
     private var oppoSlowAt: Date = .distantPast
@@ -154,6 +158,9 @@ final class CpeStore: ObservableObject {
         todayTxDelta = 0
         lastOppoRx = 0
         lastOppoTx = 0
+        lastSpeedRx = 0
+        lastSpeedTx = 0
+        lastSpeedAt = .distantPast
         oppoSlowCache = [:]
         oppoSlowAt = .distantPast
         lastTodayTotal = 0
@@ -321,13 +328,24 @@ final class CpeStore: ObservableObject {
                 }
             }
 
-            // ── 实时速率：每次轮询都读（轻量 DOM 查询，约 50ms）──
-            let sp = await OppoBridge.shared.fetchSpeeds()
-            if sp.rx > 0 || sp.tx > 0 {
-                realtimeRx = sp.rx * 1_000_000      // Mbps → bit/s
-                realtimeTx = sp.tx * 1_000_000
-                v["speedRx"] = String(Int(sp.rx * 1_000_000 / 8))
-                v["speedTx"] = String(Int(sp.tx * 1_000_000 / 8))
+            // ── 实时速率：用累计字节差计算（页面本身 5 秒才更新，但接口每秒都在变）──
+            let bytes = await OppoBridge.shared.fetchBytes()
+            let now = Date()
+            if bytes.rx > 0 || bytes.tx > 0 {
+                let dt = now.timeIntervalSince(lastSpeedAt)
+                if lastSpeedAt != .distantPast, dt > 0.3, dt < 10,
+                   bytes.rx >= lastSpeedRx, bytes.tx >= lastSpeedTx {
+                    // 字节差 ÷ 时间 = 真实速率
+                    let rxBps = (bytes.rx - lastSpeedRx) / dt
+                    let txBps = (bytes.tx - lastSpeedTx) / dt
+                    realtimeRx = rxBps * 8
+                    realtimeTx = txBps * 8
+                    v["speedRx"] = String(Int(rxBps))
+                    v["speedTx"] = String(Int(txBps))
+                }
+                lastSpeedRx = bytes.rx
+                lastSpeedTx = bytes.tx
+                lastSpeedAt = now
             }
 
             status.raw = v
@@ -401,6 +419,9 @@ final class CpeStore: ObservableObject {
         todayTxDelta = 0
         lastOppoRx = 0
         lastOppoTx = 0
+        lastSpeedRx = 0
+        lastSpeedTx = 0
+        lastSpeedAt = .distantPast
         oppoSlowCache = [:]
         oppoSlowAt = .distantPast
         lastTodayTotal = 0
