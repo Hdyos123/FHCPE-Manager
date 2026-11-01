@@ -394,7 +394,13 @@ struct LoginView: View {
             addLog("  请输入密码")
         }
 
-        focus = .pass
+        // 不自动弹键盘，用户点了输入框再说
+
+        // 有密码 + 开了自动登录 → 直接连
+        if !password.isEmpty && autoLogin && !busy {
+            addLog("  自动登录…")
+            await doConnect()
+        }
     }
 
     private func selectVendor(_ v: CpeVendor) {
