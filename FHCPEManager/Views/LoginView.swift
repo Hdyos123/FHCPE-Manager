@@ -48,20 +48,19 @@ struct LoginView: View {
             guard !hasAutoDetected else { return }
             hasAutoDetected = true
 
-            // 已有保存的设备，直接带出来，不扫描（省时间）
-            if let p = ProfileStore.active ?? ProfileStore.loadAll().first {
+            // 先快速带出上次设备（立刻有内容显示）
+            let saved = ProfileStore.active ?? ProfileStore.loadAll().first
+            if let p = saved {
                 vendor = p.vendor
                 host = p.host
                 user = p.user
                 password = p.password
-                addLog("已载入上次设备：\(p.vendor.displayName) @ \(p.host)")
-                if !p.password.isEmpty { focus = .pass }
-                return
+                addLog("上次设备：\(p.vendor.displayName) @ \(p.host)")
             }
 
-            // 没有保存过，自动扫描
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            await autoDetect()
+            // 然后扫描当前实际连的是哪台，不同就自动切换
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            await autoDetect(preferred: saved)
         }
         .sheet(isPresented: $showVendorPicker) {
             VendorPicker(current: vendor, onSelect: selectVendor)
@@ -352,38 +351,47 @@ struct LoginView: View {
     private var canReveal: Bool { !user.trimmingCharacters(in: .whitespaces).isEmpty }
 
     /// 自动扫描局域网并识别设备
-    private func autoDetect() async {
+    /// - Parameter preferred: 上次使用的设备（找到相同设备时沿用其密码）
+    private func autoDetect(preferred: CpeProfile? = nil) async {
         guard !detecting else { return }
         detecting = true
-        addLog("开始扫描局域网…")
+        addLog("正在检测当前连接的设备…")
 
         let results = await CpeDetector.detect()
         detecting = false
 
         guard let first = results.first else {
-            addLog("✗ 未发现可识别的 CPE 设备")
-            addLog("  请确认已连接设备 Wi-Fi")
+            addLog("✗ 未检测到可识别的设备")
+            if preferred != nil {
+                addLog("  保持上次设备设置")
+            } else {
+                addLog("  请确认已连接 CPE 的 Wi-Fi")
+            }
             return
         }
 
-        // 找到就自动填充
+        let old = preferred ?? (vendor != nil ? CpeProfile.make(vendor: vendor!) : nil)
+        let changed = (old?.vendor != first.vendor) || (old?.host != first.host)
+
         vendor = first.vendor
         host = first.host
         user = first.vendor.defaultUser
         Haptic.success()
 
-        addLog("✓ 发现 \(first.vendor.displayName)：\(first.host)（\(first.evidence)）")
-        if results.count > 1 {
-            addLog("  还发现 \(results.count - 1) 台，已选用第一台")
+        addLog("✓ 当前设备：\(first.vendor.displayName) @ \(first.host)（\(first.evidence)）")
+        if changed, let o = old {
+            addLog("  已从 \(o.vendor.displayName) @ \(o.host) 切换")
         }
-        addLog("  已自动填入地址与账号，请输入密码")
 
-        // 有保存的密码就带出来
+        // 匹配已保存的密码
         if let saved = ProfileStore.loadAll().first(where: {
             $0.vendor == first.vendor && $0.host == first.host && !$0.password.isEmpty
         }) {
             password = saved.password
-            addLog("  已填入上次保存的密码")
+            addLog("  已填入保存的密码")
+        } else {
+            password = ""
+            addLog("  请输入密码")
         }
 
         focus = .pass
