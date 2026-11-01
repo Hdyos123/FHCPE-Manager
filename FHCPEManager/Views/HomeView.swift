@@ -3,6 +3,7 @@ import SwiftUI
 
 struct HomeView: View {
     @EnvironmentObject var store: CpeStore
+    @EnvironmentObject var router: TabRouter
     @State private var showDevices = false
     @State private var showModel = false
     @State private var showControl = false
@@ -208,11 +209,11 @@ struct HomeView: View {
                                 store.toast("正在刷新…", kind: .info)
                                 Task { await store.fetchAll() }
                             }
-                            iconBtn("slider.horizontal.3", "控制") { showControl = true }
+                            iconBtn("slider.horizontal.3", "控制") { router.go(.control) }
                         }
                         GridRow {
-                            iconBtn("lock.fill", "锁频") { showLock = true }
-                            iconBtn("doc.text", "参数") { showParam = true }
+                            iconBtn("lock.fill", "锁频") { router.go(.lock) }
+                            iconBtn("doc.text", "参数") { router.go(.param) }
                         }
                     }
                     .frame(width: 92)
@@ -506,8 +507,8 @@ struct HomeView: View {
 
     private var contractCards: some View {
         Group {
-            if store.isOppo {
-                // OPPO 无 QCI/AMBR，改为显示小区标识
+            if store.isOppo || store.isHuawei {
+                // OPPO / 华为：显示小区标识
                 HStack(spacing: 9) {
                     contractItem("频段", s["band"].isEmpty ? "--" : "n" + s["band"],
                                  "teal", subtitle: oppoBandHint)
@@ -870,6 +871,10 @@ struct HomeView: View {
         if store.isOppo {
             return store.activeProfile?.displayTitle ?? "OPPO"
         }
+        if store.isHuawei {
+            let m = s.deviceModel
+            return (m.isEmpty || m == "CPE") ? "华为" : m
+        }
         // 烽火：优先显示设备型号
         let model = s.deviceModel
         if !model.isEmpty && model != "CPE" { return model }
@@ -878,7 +883,7 @@ struct HomeView: View {
 
     /// 在线设备数：烽火用 hosts，OPPO 用页面识别到的数量
     private var onlineDeviceCount: Int {
-        if store.isOppo {
+        if store.isOppo || store.isHuawei {
             return Int(s["online"]) ?? 0
         }
         return store.hosts.count
