@@ -19,6 +19,10 @@ final class CpeStore: ObservableObject {
     private var lastOppoTx: Double = 0
     /// 速率采样窗口（避免某些秒字节数没变导致显示 0）
     private var speedSamples: [(t: Date, rx: Double, tx: Double)] = []
+    /// 华为慢变数据缓存
+    private var hwSlowCache: [String: String] = [:]
+    private var hwSlowAt: Date = .distantPast
+
     /// OPPO 慢变数据缓存（信号/小区/设备），避免每秒触发页面重排
     private var oppoSlowCache: [String: String] = [:]
     private var oppoSlowAt: Date = .distantPast
@@ -33,6 +37,8 @@ final class CpeStore: ObservableObject {
     /// 当前设备是否已断开（连续探测失败）
     @Published var currentOffline = false
     var isOppo: Bool { activeProfile?.vendor == .oppo }
+    var isHuawei: Bool { activeProfile?.vendor == .huawei }
+    var isFiberHome: Bool { activeProfile?.vendor == .fiberhome }
     @Published var isLoading = false
     @Published var errorText: String?
     @Published var toastText: String?
@@ -107,10 +113,47 @@ final class CpeStore: ObservableObject {
     /// 使用设备档案登录（自动按厂商分流）
     func login(profile: CpeProfile) async -> Bool {
         activeProfile = profile
-        if profile.vendor == .oppo {
-            return await loginOppo(profile)
+        switch profile.vendor {
+        case .oppo:     return await loginOppo(profile)
+        case .huawei:   return await loginHuawei(profile)
+        case .fiberhome:
+            return await login(host: profile.host, user: profile.user, password: profile.password)
         }
-        return await login(host: profile.host, user: profile.user, password: profile.password)
+    }
+
+    /// 华为登录：SCRAM 明文 XML（无加密）
+    private func loginHuawei(_ profile: CpeProfile) async -> Bool {
+        errorText = nil
+        isLoading = true
+        defer { isLoading = false }
+        clearAll()
+
+        do {
+            try await HuaweiAPI.shared.login(host: profile.host,
+                                             user: profile.user,
+                                             password: profile.password)
+        } catch {
+            errorText = (error as? LocalizedError)?.errorDescription ?? "登录失败"
+            return false
+        }
+
+        // 取一次数据确认可用
+        var d: [String: String] = [:]
+        for _ in 1...4 {
+            d = await HuaweiAPI.shared.fetchOverview()
+            if !d.isEmpty { break }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        guard !d.isEmpty else {
+            errorText = "登录成功但读不到数据"
+            return false
+        }
+
+        ProfileStore.upsert(profile)
+        ProfileStore.activeID = profile.id
+        isLoggedIn = true
+        await fetchStatus()
+        return true
     }
 
     /// OPPO 登录：WebView 桥接
@@ -167,6 +210,8 @@ final class CpeStore: ObservableObject {
         offlineStreak = 0
         oppoSlowCache = [:]
         oppoSlowAt = .distantPast
+        hwSlowCache = [:]
+        hwSlowAt = .distantPast
         lastTodayTotal = 0
         trafficUpdatedAt = Date()
     }
@@ -308,6 +353,36 @@ final class CpeStore: ObservableObject {
     }
 
     func fetchStatus() async {
+        // 华为：明文 XML 接口
+        if isHuawei {
+            // 慢变数据（信号/设备信息/本月）：每 5 秒
+            var v = hwSlowCache
+            if Date().timeIntervalSince(hwSlowAt) > 5 || v.isEmpty {
+                let d = await HuaweiAPI.shared.fetchOverview()
+                if !d.isEmpty {
+                    v = d
+                    hwSlowCache = v
+                    hwSlowAt = Date()
+                }
+            }
+
+            // 快变数据（速率/今日流量）：每次轮询
+            let r = await HuaweiAPI.shared.fetchRates()
+            if r.rx > 0 || r.tx > 0 || r.todayRx > 0 {
+                realtimeRx = r.rx * 8
+                realtimeTx = r.tx * 8
+                v["speedRx"] = String(Int(r.rx))
+                v["speedTx"] = String(Int(r.tx))
+                v["todayRx"] = String(Int(r.todayRx))
+                v["todayTx"] = String(Int(r.todayTx))
+                v["todayTotal"] = String(Int(r.todayRx + r.todayTx))
+                if r.uptime > 0 { v["uptime"] = String(r.uptime) }
+            }
+
+            status.raw = v
+            return
+        }
+
         // OPPO 设备：走 WebView 桥接，解析首页文本
         if isOppo {
             // ── 慢变数据（信号/小区/流量）：每 5 秒一次 ──
@@ -442,6 +517,8 @@ final class CpeStore: ObservableObject {
         offlineStreak = 0
         oppoSlowCache = [:]
         oppoSlowAt = .distantPast
+        hwSlowCache = [:]
+        hwSlowAt = .distantPast
         lastTodayTotal = 0
         trafficUpdatedAt = Date()
     }
@@ -641,6 +718,7 @@ final class CpeStore: ObservableObject {
 
     /// 重启设备：按厂商分流
     func reboot() async -> Bool {
+        if isHuawei { return await HuaweiAPI.shared.reboot() }
         if isOppo {
             return await OppoBridge.shared.reboot()
         }
