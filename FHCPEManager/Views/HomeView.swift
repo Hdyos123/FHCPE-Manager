@@ -11,6 +11,8 @@ struct HomeView: View {
     @State private var showSms = false
     @State private var showContract = false
     @State private var showSwitcher = false
+    @State private var showRebootConfirm = false
+    @State private var rebooting = false
     @AppStorage("customDown") private var customDown: String = ""
     @AppStorage("customUp") private var customUp: String = ""
 
@@ -56,6 +58,23 @@ struct HomeView: View {
             }
             .sheet(isPresented: $showParam) {
                 ParamView().environmentObject(store)
+            }
+            .alert("重启设备", isPresented: $showRebootConfirm) {
+                Button("取消", role: .cancel) { }
+                Button("重启", role: .destructive) {
+                    guard !rebooting else { return }
+                    rebooting = true
+                    Haptic.warning()
+                    Task {
+                        let ok = await store.reboot()
+                        rebooting = false
+                        store.toast(ok ? "重启指令已发送，设备将在 1 分钟内恢复"
+                                       : "重启失败，请检查连接",
+                                    kind: ok ? .success : .error)
+                    }
+                }
+            } message: {
+                Text("重启期间所有设备会断开网络，约需 1 分钟恢复。\n\n确定要重启吗？")
             }
             .sheet(isPresented: $showSwitcher) {
                 DeviceSwitcher()
@@ -108,6 +127,20 @@ struct HomeView: View {
                         startPoint: .topLeading, endPoint: .bottomTrailing)))
 
                 Spacer()
+
+                // 重启按钮（设备选择左边）
+                Button {
+                    Haptic.warning()
+                    showRebootConfirm = true
+                } label: {
+                    Image(systemName: "power")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.red.opacity(0.85))
+                        .frame(width: 28, height: 26)
+                        .background(Capsule().fill(Color.red.opacity(0.10)))
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 2)
 
                 // 设备型号：点击切换设备
                 Button {
