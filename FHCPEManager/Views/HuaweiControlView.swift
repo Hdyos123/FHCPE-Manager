@@ -273,7 +273,8 @@ struct HuaweiControlView: View {
 
     private func loadState() {
         // 从当前状态推断移动数据（ConnectionStatus 901 = 已连接）
-        if let c = store.status["connStatus"] {
+        let c = store.status["connStatus"]
+        if !c.isEmpty {
             mobileData = (c == "901" || c == "902")
         }
     }
