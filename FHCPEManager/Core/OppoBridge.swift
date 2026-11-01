@@ -406,6 +406,50 @@ final class OppoBridge: NSObject, ObservableObject {
         }
     }
 
+    /// 重启设备：调用 OPPO 的 /ommng/Reboot
+    func reboot() async -> Bool {
+        guard ready, let wv = webView else { return false }
+
+        let js = """
+        var app = document.querySelector('#app');
+        var vm = app && app.__vue__;
+        var ax = null;
+        (function walk(v, d){
+          if (!v || d > 6 || ax) return;
+          if (v.$http) { ax = v.$http; return; }
+          (v.$children || []).forEach(function(c){ walk(c, d+1); });
+        })(vm, 0);
+        if (!ax) return 'NO_AXIOS';
+        try {
+          var r = await ax.post('/ommng/Reboot', {});
+          return (r && r.ErrorCode === 0) ? 'OK' : ('ERR:' + JSON.stringify(r).slice(0,80));
+        } catch(e) {
+          // 重启时连接可能被切断，视为成功
+          return 'OK';
+        }
+        """
+
+        return await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
+            var done = false
+            let lock = NSLock()
+            let finish: (Bool) -> Void = { v in
+                lock.lock(); defer { lock.unlock() }
+                guard !done else { return }
+                done = true
+                c.resume(returning: v)
+            }
+
+            wv.callAsyncJavaScript(js, arguments: [:], in: nil, in: .page) { result in
+                if let str = (try? result.get()) as? String {
+                    finish(str.hasPrefix("OK"))
+                } else {
+                    finish(false)
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) { finish(true) }  // 超时也算发出
+        }
+    }
+
     /// 只读取页面上的「实时上传/下载速率」
     /// 首次扫描后缓存元素引用，之后只读 textContent（很快）
     func fetchSpeeds() async -> (rx: Double, tx: Double) {
