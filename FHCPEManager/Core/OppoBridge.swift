@@ -389,7 +389,7 @@ final class OppoBridge: NSObject, ObservableObject {
                                        arguments: [:],
                                        in: nil,
                                        in: .page) { result in
-                    guard let str = result.value as? String,
+                    guard let str = (try? result.get()) as? String,
                           let d = str.data(using: .utf8),
                           let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
                           let rx = o["rx"] as? NSNumber,
