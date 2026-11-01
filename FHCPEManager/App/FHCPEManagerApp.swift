@@ -109,12 +109,34 @@ struct OppoHost: UIViewRepresentable {
 }
 
 struct MainTabView: View {
+    @StateObject private var router = TabRouter()
+
     var body: some View {
-        TabView {
+        TabView(selection: $router.selection) {
             HomeView()
                 .tabItem { Label("首页", systemImage: "house.fill") }
+                .tag(0)
+
+            SmsTab()
+                .tabItem { Label("短信", systemImage: "message.fill") }
+                .tag(1)
+
+            ControlTab()
+                .tabItem { Label("控制", systemImage: "slider.horizontal.3") }
+                .tag(2)
+
+            LockTab()
+                .tabItem { Label("锁频", systemImage: "lock.fill") }
+                .tag(3)
+
+            ParamTab()
+                .tabItem { Label("参数", systemImage: "doc.text") }
+                .tag(4)
+
             SettingsView()
                 .tabItem { Label("设置", systemImage: "gearshape.fill") }
+                .tag(5)
         }
+        .environmentObject(router)
     }
 }
