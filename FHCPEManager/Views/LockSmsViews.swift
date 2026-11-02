@@ -477,6 +477,19 @@ struct SmsView: View {
         return s
     }
 
+    /// 从短信里提取 4-8 位验证码
+    private func verificationCode(_ s: String) -> String? {
+        let lower = s.lowercased()
+        guard lower.contains("验证码") || lower.contains("校验码")
+                || lower.contains("动态码") || lower.contains("验证代码")
+                || lower.contains("code") else { return nil }
+        guard let re = try? NSRegularExpression(pattern: "(?<![0-9])([0-9]{4,8})(?![0-9])") else { return nil }
+        let range = NSRange(s.startIndex..., in: s)
+        guard let m = re.firstMatch(in: s, range: range),
+              let r = Range(m.range(at: 1), in: s) else { return nil }
+        return String(s[r])
+    }
+
     // MARK: 发送
 
     private var composeSheet: some View {
