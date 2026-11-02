@@ -715,6 +715,7 @@ final class CpeStore: ObservableObject {
         if await CpeDetector.reachable(cur.host) {
             offlineStreak = 0
             if currentOffline { currentOffline = false }
+            NotifySwitch.lastOfflineNotify = ""     // 恢复后允许再次提醒
             return
         }
 
@@ -722,12 +723,30 @@ final class CpeStore: ObservableObject {
         guard offlineStreak >= 2 else { return }   // 连续 2 次（约 24 秒）才认定断开
         currentOffline = true
 
+        // 断开提醒（每台设备只提醒一次）
+        if NotifySwitch.offline, NotifySwitch.lastOfflineNotify != cur.host {
+            NotifySwitch.lastOfflineNotify = cur.host
+            NotifyCenter.shared.post(
+                title: "设备已断开",
+                body: cur.displayTitle + " · " + cur.host + " 连不上了",
+                category: "CAT_OFFLINE",
+                userInfo: ["host": cur.host])
+        }
+
         // 找其它已保存的设备
         for p in ProfileStore.loadAll() where p.id != cur.id && !p.host.isEmpty {
             if await CpeDetector.reachable(p.host) {
                 if detectedProfile?.id != p.id {
                     detectedProfile = p
                     toast("检测到 \(p.displayTitle)，是否切换？", kind: .info)
+                    if NotifySwitch.deviceSwitch, NotifySwitch.lastSwitchNotify != p.host {
+                        NotifySwitch.lastSwitchNotify = p.host
+                        NotifyCenter.shared.post(
+                            title: "检测到另一台设备",
+                            body: p.displayTitle + " · " + p.host,
+                            category: "CAT_SWITCH",
+                            userInfo: ["host": p.host])
+                    }
                 }
                 return
             }
