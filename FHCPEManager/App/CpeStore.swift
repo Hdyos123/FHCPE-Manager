@@ -827,8 +827,30 @@ final class CpeStore: ObservableObject {
     }
 
     /// 从后台回到前台：重建会话并立即刷新
+    /// 后台释放会话（仅烽火，用于腾出设备在线名额）
+    func releaseSessionForBackground() {
+        guard isFiberHome else { return }
+        stopPolling()
+        FiberExtras.sessionReleased = true
+        // 尽力通知设备登出（失败也不影响本地状态）
+        Task { try? await CpeNativeAPI.shared.logout() }
+    }
+
     func resumeFromBackground() async {
         guard isLoggedIn else { return }
+
+        // 之前后台释放过会话 → 重新登录
+        if FiberExtras.sessionReleased {
+            FiberExtras.sessionReleased = false
+            if isHuawei {
+                let cfg = Settings.load()
+                _ = try? await HuaweiAPI.shared.login(host: cfg.host, user: cfg.user, password: cfg.password)
+            } else if !isOppo, Settings.load().isConfigured {
+                let cfg = Settings.load()
+                CpeNativeAPI.shared.configure(host: cfg.host, user: cfg.user, pass: cfg.password)
+                _ = try? await CpeNativeAPI.shared.login()
+            }
+        }
         // 会话可能已失效，重新登录
         let cfg = Settings.load()
         if cfg.isConfigured {
