@@ -179,6 +179,8 @@ struct ControlView: View {
 struct ParamView: View {
     @EnvironmentObject var store: CpeStore
     @State private var masked = true
+    /// 单独点开的字段
+    @State private var revealed: Set<String> = []
 
     private var s: CpeStatus { store.status }
 
@@ -191,31 +193,36 @@ struct ParamView: View {
 
                     // 3 组两列信息
                     infoCard("CPE 信息", icon: "cpu", rows: [
-                        ("序列号", masked ? "••••••••" : s["sn"]),
-                        ("厂商", s["vendor"]),
-                        ("软件版本", s["swver"]),
-                        ("硬件版本", s["hwver"]),
-                        ("工作模式", s["workmode"]),
-                        ("模组版本", s["modem"])
+                        ("序列号", s["sn"], true),
+                        ("厂商", s["vendor"], false),
+                        ("软件版本", s["swver"], false),
+                        ("硬件版本", s["hwver"], false),
+                        ("工作模式", s["workmode"], false),
+                        ("模组版本", s["modem"], false)
                     ])
 
                     infoCard("网络", icon: "wifi", rows: [
-                        ("WAN IP", s["wanIP"]),
-                        ("LAN IP", s["lanIP"]),
-                        ("2.4G SSID", s["ssid24"]),
-                        ("5G SSID", s["ssid5g"]),
-                        ("在线设备", s["online"] + " 台"),
-                        ("连接状态", s["wanStatus"] == "Connected" ? "已连接" : s["wanStatus"])
+                        ("WAN IP", s["wanIP"], false),
+                        ("LAN IP", s["lanIP"], false),
+                        ("2.4G SSID", s["ssid24"], false),
+                        ("5G SSID", s["ssid5g"], false),
+                        ("在线设备", s["online"] + " 台", false),
+                        ("连接状态", s["wanStatus"] == "Connected" ? "已连接" : s["wanStatus"], false)
                     ])
 
                     infoCard("SIM 卡", icon: "simcard", rows: [
-                        ("运营商", s.carrierName),
-                        ("本机号码", masked ? "••••••••" : s["phone"]),
-                        ("IMSI", masked ? "••••••••" : s["imsi"]),
-                        ("ICCID", masked ? "••••••••" : s["iccid"]),
-                        ("IMEI", masked ? "••••••••" : s["imei"]),
-                        ("注册状态", s["regstatus"] == "0" ? "已注册" : "未注册")
+                        ("运营商", s.carrierName, false),
+                        ("本机号码", s["phone"], true),
+                        ("IMSI", s["imsi"], true),
+                        ("ICCID", s["iccid"], true),
+                        ("IMEI", s["imei"], true),
+                        ("注册状态", s["regstatus"] == "0" ? "已注册" : "未注册", false)
                     ])
+
+                    Text("点星号可单独查看该项")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary.opacity(0.7))
+                        .frame(maxWidth: .infinity, alignment: .center)
                 }
                 .padding(.horizontal, 14)
                 .padding(.top, 8)
@@ -227,9 +234,16 @@ struct ParamView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
+                        Haptic.light()
                         masked.toggle()
+                        if !masked { revealed.removeAll() }
                     } label: {
-                        Image(systemName: masked ? "eye.slash" : "eye")
+                        HStack(spacing: 3) {
+                            Image(systemName: masked ? "eye.slash" : "eye")
+                                .font(.system(size: 12))
+                            Text(masked ? "一键显示" : "全部隐藏")
+                                .font(.system(size: 12))
+                        }
                     }
                 }
             }
@@ -267,7 +281,7 @@ struct ParamView: View {
 
     /// 三列网格信息卡（更紧凑，无需长列表滚动）
     private func infoCard(_ title: String, icon: String,
-                          rows: [(String, String)]) -> some View {
+                          rows: [(String, String, Bool)]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 Image(systemName: icon)
@@ -286,10 +300,29 @@ struct ParamView: View {
                         Text(r.0)
                             .font(.system(size: 10))
                             .foregroundStyle(.secondary)
-                        Text(r.1.isEmpty || r.1 == "-" ? "--" : r.1)
-                            .font(.system(size: 12.5, weight: .medium))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.75)
+
+                        if r.2 && masked && !revealed.contains(r.0) {
+                            // 敏感项：点一下单独显示
+                            Button {
+                                Haptic.light()
+                                _ = revealed.insert(r.0)
+                            } label: {
+                                HStack(spacing: 3) {
+                                    Text("••••••••")
+                                        .font(.system(size: 12.5, weight: .medium))
+                                    Text("显示")
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(.blue.opacity(0.8))
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                            Text(r.1.isEmpty || r.1 == "-" ? "--" : r.1)
+                                .font(.system(size: 12.5, weight: .medium))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.75)
+                                .textSelection(.enabled)
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -400,6 +433,14 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
                 } header: {
                     Text("数据刷新")
+                }
+
+                // ── 通知（所有设备）──
+                NotifySection()
+
+                // ── 烽火增强（仅烽火显示）──
+                if store.isFiberHome {
+                    FiberExtrasSection()
                 }
 
                 // ── 显示 ──
