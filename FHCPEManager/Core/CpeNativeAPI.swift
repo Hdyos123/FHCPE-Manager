@@ -307,6 +307,22 @@ final class CpeNativeAPI {
         _ = try? await request("/api/tmp/FHAPIS?_\(rnd())", body: payload)
     }
 
+    /// multipost 的原始返回（保留 data_1 / data_2 等全部字段）
+    func multipostRaw(_ method: String, _ data: [String: Any]) async throws -> [String: Any] {
+        try await refreshSession()
+        let inner: [String: Any] = [
+            "ajaxmethod": method,
+            "multipost": 1,
+            "dataObj": data,
+            "sessionid": sid
+        ]
+        guard let pd = try? JSONSerialization.data(withJSONObject: inner),
+              let ps = String(data: pd, encoding: .utf8),
+              let payload = encrypt(ps) else { throw NError.crypto }
+        let r = try await request("/api/tmp/FHAPIS?_\(rnd())", body: payload)
+        return decode(r)
+    }
+
     func runCommand(_ key: String) async throws {
         try await refreshSession()
         let inner: [String: Any] = [
