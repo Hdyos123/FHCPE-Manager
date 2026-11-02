@@ -17,6 +17,9 @@ struct RootView: View {
     @EnvironmentObject var store: CpeStore
     @Environment(\.scenePhase) private var scenePhase
 
+    @StateObject private var notify = NotifyCenter.shared
+    @State private var pendingAction: NotifyAction?
+
     var body: some View {
         ZStack {
             // 隐藏的 WKWebView 宿主：负责保持 CPE 会话
