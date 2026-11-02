@@ -539,6 +539,10 @@ final class CpeStore: ObservableObject {
 
         // 1. Wi-Fi 关联设备
         let wifiRows = await q("LANDevice.1.WLANConfiguration.", [
+            "SSID": "SSID",
+            "Channel": "Channel",
+            "OperatingFrequencyBand": "OperatingFrequencyBand",
+            "SupportedFrequencyBands": "SupportedFrequencyBands",
             "AssociatedDevice": [
                 "url": "AssociatedDevice.",
                 "node": ["MAC": "AssociatedDeviceMACAddress"]
@@ -547,15 +551,44 @@ final class CpeStore: ObservableObject {
 
         var wifiMacs = Set<String>()
         var wifiBand: [String: String] = [:]
-        for (i, wl) in wifiRows.enumerated() {
+
+        // 每个 WLAN 实例先算出频段，再把它名下的终端打上标签
+        for wl in wifiRows {
+            let band = bandOf(wl)
             guard let ads = wl["AssociatedDevice"] as? [[String: Any]] else { continue }
             for ad in ads {
                 let m = (ad["MAC"] as? String ?? "").uppercased()
-                if !m.isEmpty {
-                    wifiMacs.insert(m)
-                    wifiBand[m] = i >= 4 ? "5G Wi-Fi" : "2.4G Wi-Fi"
+                guard !m.isEmpty else { continue }
+                wifiMacs.insert(m)
+                if !band.isEmpty { wifiBand[m] = band }
+            }
+        }
+
+        // 单个 WLAN 实例的频段判定：SSID 对照 → 频率字段 → 信道
+        func bandOf(_ wl: [String: Any]) -> String {
+            let ssid = (wl["SSID"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            let s24 = status["ssid24"].trimmingCharacters(in: .whitespaces)
+            let s5 = status["ssid5g"].trimmingCharacters(in: .whitespaces)
+
+            if !ssid.isEmpty {
+                if !s5.isEmpty, ssid.caseInsensitiveCompare(s5) == .orderedSame { return "5G Wi-Fi" }
+                if !s24.isEmpty, ssid.caseInsensitiveCompare(s24) == .orderedSame { return "2.4G Wi-Fi" }
+                // SSID 里带 5G 字样
+                if ssid.uppercased().contains("5G") { return "5G Wi-Fi" }
+                if ssid.uppercased().contains("2.4G") || ssid.uppercased().contains("2G") { return "2.4G Wi-Fi" }
+            }
+            for k in ["OperatingFrequencyBand", "SupportedFrequencyBands", "FrequencyBand"] {
+                if let v = wl[k] as? String, !v.isEmpty {
+                    return v.contains("5") ? "5G Wi-Fi" : "2.4G Wi-Fi"
                 }
             }
+            // 信道推断：2.4G 用 1-14，5G 从 32 起
+            if let c = wl["Channel"] as? String, let ch = Int(c) {
+                return ch <= 14 ? "2.4G Wi-Fi" : "5G Wi-Fi"
+            } else if let ch = wl["Channel"] as? Int {
+                return ch <= 14 ? "2.4G Wi-Fi" : "5G Wi-Fi"
+            }
+            return ""
         }
 
         // 2. Hosts 表（名称 / IP / 限速）
@@ -577,17 +610,23 @@ final class CpeStore: ObservableObject {
 
             let ip = (r["IPAddress"] as? String ?? "").trimmingCharacters(in: .whitespaces)
             let layer = (r["Layer2Interface"] as? String ?? "").uppercased()
-            let isWired = layer.contains("LANETHERNET")
-            let isWifi = layer.contains("WLANCONFIGURATION")
+            // 判定顺序：WiFi 关联表最可靠 → 接口名 → 兜底
+            let inWifiTable = wifiMacs.contains(mac)
+            let layerSaysEth = layer.contains("ETHERNET") || layer.contains("LANETH")
+            let layerSaysWifi = layer.contains("WLAN") || layer.contains("WIFI")
+                || layer.contains("802.11")
+
+            // 不在 WiFi 表里、又不是明确的无线接口 → 按有线处理
+            let isWired = !inWifiTable && (layerSaysEth || (!layerSaysWifi && !ip.isEmpty))
 
             // 在线判定：有 IP，或出现在 WiFi 关联表里
-            let online = !ip.isEmpty || (isWifi && wifiMacs.contains(mac))
+            let online = !ip.isEmpty || inWifiTable
             guard online else { continue }
 
             let name = (r["HostName"] as? String) ?? "设备"
             var display = name
             if name.isEmpty || name == "unknown" {
-                display = wifiMacs.contains(mac) ? "移动设备" : "有线设备"
+                display = inWifiTable ? "移动设备" : "有线设备"
             }
 
             seen.insert(mac)
