@@ -15,6 +15,7 @@ struct LoginView: View {
     @State private var busy = false
     @State private var remember = true
     @State private var autoLogin = true
+    @AppStorage("autoScanOnOpen") private var autoScanOnOpen = true
     @State private var logs: [String] = []
     @State private var showLogs = true
     @State private var detecting = false
@@ -58,9 +59,20 @@ struct LoginView: View {
                 addLog("上次设备：\(p.vendor.displayName) @ \(p.host)")
             }
 
-            // 然后扫描当前实际连的是哪台，不同就自动切换
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            await autoDetect(preferred: saved)
+            if autoScanOnOpen {
+                // 扫描当前实际连的是哪台，不同就自动切换
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                await autoDetect(preferred: saved)
+            } else {
+                // 不扫描：直接用记忆的设备，最快速度登录
+                addLog("已关闭自动检测，使用上次设备")
+                if let p = saved, !p.password.isEmpty, autoLogin, !busy {
+                    addLog("  自动登录…")
+                    await doConnect()
+                } else if saved == nil {
+                    addLog("  没有可用记录，请手动填写")
+                }
+            }
         }
         .sheet(isPresented: $showVendorPicker) {
             VendorPicker(current: vendor, onSelect: selectVendor)
@@ -256,6 +268,24 @@ struct LoginView: View {
                 toggleItem("自动登录", isOn: $autoLogin)
             }
             .padding(.top, 2)
+
+            Divider().opacity(0.35)
+
+            Toggle(isOn: Binding(
+                get: { autoScanOnOpen },
+                set: { autoScanOnOpen = $0; Haptic.light() }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("打开时自动检测设备")
+                        .font(.system(size: 14))
+                    Text(autoScanOnOpen
+                         ? "扫描局域网，自动识别当前连的是哪台"
+                         : "跳过扫描，直接用上次的设备信息快速登录")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .tint(.green)
 
             // 连接按钮
             Button {
