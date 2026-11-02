@@ -7,8 +7,7 @@ on:
         description: "版本号（如 1.1.2）"
         required: false
         default: "1.1.2"
-  push:
-    branches: [ main ]
+  # 推送不再自动构建：本项目的推送脚本逐文件提交，会触发大量重复任务
 
 jobs:
   build:
