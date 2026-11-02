@@ -381,6 +381,24 @@ final class CpeBridge: NSObject, ObservableObject {
         return arr
     }
 
+    /// multipost 的原始返回（保留 data_1 / data_2）
+    func multipostRaw(_ method: String, _ data: [String: Any]) async -> [String: Any] {
+        let dj = (try? JSONSerialization.data(withJSONObject: data)) ?? Data("{}".utf8)
+        let ds = String(data: dj, encoding: .utf8) ?? "{}"
+        let body = """
+        function(){
+          return $multipost('\(jsEscape(method))', \(ds))
+            .then(function(r){ return JSON.stringify(r); });
+        }
+        """
+        guard let str = await jsCall(body) as? String,
+              let d = str.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
+            return [:]
+        }
+        return obj
+    }
+
     /// 通用 POST（返回 {"data":[...]} 结构）
     /// 注意：让 JS 返回 JSON 字符串再在 Swift 解析，
     /// 直接返回对象时嵌套的 NSNumber/数组在桥接中容易丢失
