@@ -295,6 +295,18 @@ final class CpeNativeAPI {
         _ = try await request("/api/tmp/FHAPIS?_\(rnd())", body: payload)
     }
 
+    /// 尽力登出（把在线名额让出来）
+    func logout() async throws {
+        let inner: [String: Any] = [
+            "ajaxmethod": "DO_WEB_LOGOUT",
+            "sessionid": sid
+        ]
+        guard let pd = try? JSONSerialization.data(withJSONObject: inner),
+              let ps = String(data: pd, encoding: .utf8),
+              let payload = encrypt(ps) else { return }
+        _ = try? await request("/api/tmp/FHAPIS?_\(rnd())", body: payload)
+    }
+
     func runCommand(_ key: String) async throws {
         try await refreshSession()
         let inner: [String: Any] = [
