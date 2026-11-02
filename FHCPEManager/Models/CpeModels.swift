@@ -145,7 +145,9 @@ struct CpeHost: Identifiable {
     var isWired: Bool { iface.uppercased().contains("ETHERNET") }
     var bandLabel: String {
         if isWired { return "有线" }
-        return iface.contains("5G") ? "5G Wi-Fi" : "2.4G Wi-Fi"
+        if iface.contains("5G") { return "5G Wi-Fi" }
+        if iface.contains("2.4G") { return "2.4G Wi-Fi" }
+        return "Wi-Fi"
     }
 }
 
