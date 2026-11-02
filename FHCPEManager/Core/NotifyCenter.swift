@@ -158,7 +158,7 @@ final class NotifyCenter: ObservableObject {
     }
 
     /// 从通知动作解析出待确认操作
-    func handleAction(category: String, actionID: String, userInfo: [String: Any]) {
+    func handleAction(category: String, actionID: String, userInfo: [AnyHashable: Any]) {
         guard actionID == "ACT_YES" else { return }
         switch category {
         case "CAT_SWITCH":
