@@ -34,10 +34,11 @@ struct LockBandView: View {
                 .padding(.horizontal, 14)
                 .padding(.top, 8)
                 .padding(.bottom, 30)
+                .frame(maxWidth: .infinity)
             }
-            .background(GlassListBackground())
             .navigationTitle("锁频")
             }
+            .background(GlassListBackground())
             .task { loadCurrent() }
             .alert("确认操作", isPresented: $showConfirm) {
                 Button("取消", role: .cancel) { }
@@ -321,11 +322,12 @@ struct SmsView: View {
                     .padding(.horizontal, 14)
                     .padding(.top, 8)
                     .padding(.bottom, 30)
+                    .frame(maxWidth: .infinity)
                 }
-                .background(GlassListBackground())
                 .refreshable { await load() }
                 .navigationTitle("短信")
             }
+            .background(GlassListBackground())
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
