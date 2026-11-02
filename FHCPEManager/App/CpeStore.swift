@@ -658,19 +658,50 @@ final class CpeStore: ObservableObject {
     }
 
     func fetchSms() async -> [CpeSms] {
-        let rows = await mp("get_xml_childnode_value", [
-            "data_1": [
-                "url": "InternetGatewayDevice.X_FH_MobileNetwork.SMS_Recv.SMS_RecvMsg.",
-                "node": ["Sender": "Sender", "Content": "Content", "RecvTime": "RecvTime"]
-            ]
-        ])
-        return rows.compactMap { row -> CpeSms? in
-            let sender = (row["Sender"] as? String ?? "").trimmingCharacters(in: .whitespaces)
-            let content = (row["Content"] as? String ?? "").trimmingCharacters(in: .whitespaces)
-            guard !sender.isEmpty || !content.isEmpty else { return nil }
-            return CpeSms(sender: sender, content: content,
-                          time: row["RecvTime"] as? String ?? "")
+        // 不同固件的短信节点路径不一样，逐个试，取第一个有数据的
+        let urls = [
+            "X_FH_MobileNetwork.SMS_Recv.SMS_RecvMsg.",
+            "X_FH_MobileNetwork.SMS.SMS_RecvMsg.",
+            "X_FH_SMS.SMS_RecvMsg.",
+            "X_FH_MobileNetwork.SMS_Recv.",
+            "InternetGatewayDevice.X_FH_MobileNetwork.SMS_Recv.SMS_RecvMsg."
+        ]
+
+        for url in urls {
+            let rows = await mp("get_xml_childnode_value", [
+                "data_1": [
+                    "url": url,
+                    "node": [
+                        "Sender": "Sender",
+                        "Phone": "Phone",
+                        "SmsSender": "SmsSender",
+                        "Content": "Content",
+                        "SmsContent": "SmsContent",
+                        "RecvTime": "RecvTime",
+                        "Date": "Date"
+                    ]
+                ]
+            ])
+            let list = rows.compactMap { row -> CpeSms? in
+                let sender = firstString(row, ["Sender", "Phone", "SmsSender"])
+                let content = firstString(row, ["Content", "SmsContent"])
+                guard !sender.isEmpty || !content.isEmpty else { return nil }
+                return CpeSms(sender: sender, content: content,
+                              time: firstString(row, ["RecvTime", "Date"]))
+            }
+            if !list.isEmpty { return list }
         }
+        return []
+    }
+
+    private func firstString(_ row: [String: Any], _ keys: [String]) -> String {
+        for k in keys {
+            if let v = row[k] as? String {
+                let t = v.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !t.isEmpty && t != "-" { return t }
+            }
+        }
+        return ""
     }
 
     // MARK: - 控制
@@ -841,8 +872,17 @@ final class CpeStore: ObservableObject {
 
     /// 发送短信
     func sendSms(to: String, text: String) async -> Bool {
+        guard !to.trimmingCharacters(in: .whitespaces).isEmpty,
+              !text.isEmpty else { return false }
         let rows = await mp("send_sms", ["phone_number": to, "content": text])
-        _ = rows
+
+        // 有返回时检查错误码；为空则按成功处理（多数固件成功时不返回内容）
+        if let first = rows.first {
+            for k in ["ErrorCode", "errorcode", "code"] {
+                if let v = first[k] as? String, v != "0" && !v.isEmpty { return false }
+                if let v = first[k] as? Int, v != 0 { return false }
+            }
+        }
         return true
     }
 
