@@ -55,6 +55,12 @@ struct RootView: View {
         }
         .animation(.easeInOut(duration: 0.25), value: store.isLoggedIn)
         .onAppear {
+            NotifyCenter.shared.bootstrap()
+            if NotifySwitch.flowLimit || NotifySwitch.offline
+                || NotifySwitch.deviceSwitch || NotifySwitch.newSms
+                || NotifySwitch.newClient {
+                NotifyCenter.shared.requestAuth()
+            }
             Task { await store.tryAutoLogin() }
             // 自愈定时器：每 5 秒检查轮询是否还活着（分屏挂边时系统可能挂起 Task）
             // 恢复屏幕常亮设置
@@ -67,9 +73,33 @@ struct RootView: View {
 
             // 每分钟检查：流量限额提醒 + 定时重启（仅烽火生效）
             FiberExtrasRunner.startMinuteTicker(store)
+
+            // 通知检查：流量 / 在线数 / 新短信
+            Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
+                Task { @MainActor in await NotifyRunner.tick(store) }
+            }
         }
         .onChange(of: store.isLoggedIn) { ok in
             if ok { store.startPolling() } else { store.stopPolling() }
+        }
+        .onChange(of: notify.pending) { act in
+            pendingAction = act
+        }
+        .alert(pendingAction?.confirmTitle ?? "",
+               isPresented: Binding(
+                get: { pendingAction != nil },
+                set: { if !$0 { pendingAction = nil; notify.pending = nil } }
+               )) {
+            Button("取消", role: .cancel) {
+                pendingAction = nil; notify.pending = nil
+            }
+            Button(pendingAction?.confirmButton ?? "确定") {
+                let a = pendingAction
+                pendingAction = nil; notify.pending = nil
+                Task { await handleNotifyAction(a, store: store) }
+            }
+        } message: {
+            Text(pendingAction?.confirmMessage ?? "")
         }
         .onChange(of: scenePhase) { phase in
             switch phase {
@@ -112,6 +142,22 @@ struct OppoHost: UIViewRepresentable {
         return v
     }
     func updateUIView(_ uiView: UIView, context: Context) {}
+}
+
+/// 执行通知动作（已通过二次确认）
+@MainActor
+private func handleNotifyAction(_ a: NotifyAction?, store: CpeStore) async {
+    guard let a else { return }
+    switch a {
+    case .switchDevice(let host):
+        if let p = ProfileStore.loadAll().first(where: { $0.host == host }) {
+            await store.switchTo(p)
+        }
+    case .retryConnect:
+        await store.resumeFromBackground()
+    default:
+        break   // 打开类动作交给 Tab 切换处理
+    }
 }
 
 struct MainTabView: View {
