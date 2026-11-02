@@ -657,41 +657,48 @@ final class CpeStore: ObservableObject {
         hosts = result
     }
 
+    /// 读取收件箱：烽火用专用接口 get_sms_data
     func fetchSms() async -> [CpeSms] {
-        // 不同固件的短信节点路径不一样，逐个试，取第一个有数据的
-        let urls = [
-            "X_FH_MobileNetwork.SMS_Recv.SMS_RecvMsg.",
-            "X_FH_MobileNetwork.SMS.SMS_RecvMsg.",
-            "X_FH_SMS.SMS_RecvMsg.",
-            "X_FH_MobileNetwork.SMS_Recv.",
-            "InternetGatewayDevice.X_FH_MobileNetwork.SMS_Recv.SMS_RecvMsg."
+        let query: [String: Any] = [
+            "AirplaneEnable": "InternetGatewayDevice.X_FH_NetworkSettings.AirplaneEnable",
+            "SMSDisable": "InternetGatewayDevice.X_FH_NetworkSettings.SMSDisable"
         ]
 
-        for url in urls {
-            let rows = await mp("get_xml_childnode_value", [
-                "data_1": [
-                    "url": url,
-                    "node": [
-                        "Sender": "Sender",
-                        "Phone": "Phone",
-                        "SmsSender": "SmsSender",
-                        "Content": "Content",
-                        "SmsContent": "SmsContent",
-                        "RecvTime": "RecvTime",
-                        "Date": "Date"
-                    ]
-                ]
-            ])
-            let list = rows.compactMap { row -> CpeSms? in
-                let sender = firstString(row, ["Sender", "Phone", "SmsSender"])
-                let content = firstString(row, ["Content", "SmsContent"])
-                guard !sender.isEmpty || !content.isEmpty else { return nil }
-                return CpeSms(sender: sender, content: content,
-                              time: firstString(row, ["RecvTime", "Date"]))
-            }
-            if !list.isEmpty { return list }
+        var resp: [String: Any] = [:]
+        if useNative {
+            resp = (try? await CpeNativeAPI.shared.multipostRaw(
+                "get_value_by_xmlnode|get_sms_data", query)) ?? [:]
+        } else {
+            resp = await bridge.multipostRaw("get_value_by_xmlnode|get_sms_data", query)
         }
-        return []
+
+        // 短信在 data_2：{ 手机号: { message_item_N: { msg_content, time, ... } } }
+        guard let d2 = resp["data_2"] else { return [] }
+
+        var out: [CpeSms] = []
+        func handleEntry(_ phone: String, _ entry: Any) {
+            guard let dict = entry as? [String: Any] else { return }
+            for (key, value) in dict where key.hasPrefix("message_item") {
+                guard let m = value as? [String: Any] else { continue }
+                let content = (m["msg_content"] as? String)
+                    ?? (m["content"] as? String) ?? ""
+                let time = (m["time"] as? String) ?? ""
+                guard !content.isEmpty else { continue }
+                out.append(CpeSms(sender: phone, content: content, time: time))
+            }
+        }
+
+        if let dict = d2 as? [String: Any] {
+            for (phone, entry) in dict { handleEntry(phone, entry) }
+        } else if let arr = d2 as? [[String: Any]] {
+            for item in arr {
+                let phone = (item["phone"] as? String) ?? (item["Phone"] as? String) ?? "未知号码"
+                handleEntry(phone, item)
+            }
+        }
+
+        // 按时间倒序（时间格式 yyyy-MM-dd HH:mm:ss，字符串比较即可）
+        return out.sorted { $0.time > $1.time }
     }
 
     private func firstString(_ row: [String: Any], _ keys: [String]) -> String {
@@ -874,15 +881,23 @@ final class CpeStore: ObservableObject {
     func sendSms(to: String, text: String) async -> Bool {
         guard !to.trimmingCharacters(in: .whitespaces).isEmpty,
               !text.isEmpty else { return false }
-        let rows = await mp("send_sms", ["phone_number": to, "content": text])
+        // 含非 ASCII 字符时用 UCS2，否则 8BIT
+        let needUCS2 = text.unicodeScalars.contains { $0.value >= 1000 }
+        let payload: [String: Any] = [
+            "recv_number": to,
+            "encode_schema": needUCS2 ? "GSM_UCS2" : "GSM_8BIT",
+            "content": text
+        ]
 
-        // 有返回时检查错误码；为空则按成功处理（多数固件成功时不返回内容）
-        if let first = rows.first {
-            for k in ["ErrorCode", "errorcode", "code"] {
-                if let v = first[k] as? String, v != "0" && !v.isEmpty { return false }
-                if let v = first[k] as? Int, v != 0 { return false }
-            }
+        var resp: [String: Any] = [:]
+        if useNative {
+            resp = (try? await CpeNativeAPI.shared.post("send_msg", payload)) ?? [:]
+        } else {
+            resp = await bridge.post("send_msg", payload)
         }
+
+        if let r = resp["result"] as? Int { return r == 0 }
+        if let r = resp["result"] as? String { return r.isEmpty || r == "0" }
         return true
     }
 
