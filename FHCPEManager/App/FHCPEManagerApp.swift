@@ -64,6 +64,9 @@ struct RootView: View {
             Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
                 Task { @MainActor in store.ensurePollingAlive() }
             }
+
+            // 每分钟检查：流量限额提醒 + 定时重启（仅烽火生效）
+            FiberExtrasRunner.startMinuteTicker(store)
         }
         .onChange(of: store.isLoggedIn) { ok in
             if ok { store.startPolling() } else { store.stopPolling() }
@@ -71,7 +74,8 @@ struct RootView: View {
         .onChange(of: scenePhase) { phase in
             switch phase {
             case .active:
-                // 回到前台 / 分屏恢复：重启轮询并立即刷新
+                // 回到前台：取消待执行的会话释放，并重连
+                FiberExtrasRunner.cancelPendingRelease()
                 Task { await store.resumeFromBackground() }
             case .inactive:
                 // 分屏挂边、下拉通知中心等：保持轮询，只补一次刷新
@@ -79,6 +83,8 @@ struct RootView: View {
             case .background:
                 // 真正进入后台：停止轮询节省资源
                 store.stopPolling()
+                // 烽火：可选的后台释放会话，腾出设备在线名额
+                FiberExtrasRunner.scheduleReleaseIfNeeded(store)
             @unknown default:
                 break
             }
