@@ -22,100 +22,20 @@ struct LockBandView: View {
     var body: some View {
         NavigationStack {
             WideAdapter(maxWidth: 560) {
-            List {
-                Section {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("当前频段")
-                                .font(.system(size: 12)).foregroundStyle(.secondary)
-                            Text("N\(s["band"].isEmpty ? "--" : s["band"])")
-                                .font(.system(size: 22, weight: .bold))
-                                .foregroundStyle(.blue)
-                        }
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 2) {
-                            Text("PCI").font(.system(size: 11)).foregroundStyle(.secondary)
-                            Text(s["pci"].isEmpty ? "--" : s["pci"])
-                                .font(.system(size: 15, weight: .semibold))
-                        }
-                        VStack(alignment: .trailing, spacing: 2) {
-                            Text("带宽").font(.system(size: 11)).foregroundStyle(.secondary)
-                            Text(s["bw"].isEmpty ? "--" : s["bw"])
-                                .font(.system(size: 15, weight: .semibold))
-                        }
-                    }
-                    .padding(.vertical, 3)
+            ScrollView {
+                VStack(spacing: 12) {
+                    currentCard
+                    modeCard
+                    bandGridCard
+                    carrierCard
+                    applyBar
+                    hints
                 }
-
-                Section {
-                    Toggle("启用频段锁定", isOn: $lockEnabled)
-                } header: {
-                    Text("5G NR")
-                } footer: {
-                    Text("锁定后设备将只在选定频段工作，可能影响信号。")
-                }
-
-                Section {
-                    ForEach(nrBands, id: \.self) { b in
-                        bandRow("n\(b)", selected: selectedNR.contains(b)) {
-                            toggleNR(b)
-                        }
-                    }
-                }
-
-                Section("4G LTE") {
-                    ForEach(lteBands, id: \.self) { b in
-                        bandRow("B\(b)", selected: selectedLTE.contains(b)) {
-                            toggleLTE(b)
-                        }
-                    }
-                }
-
-                Section {
-                    Button {
-                        pendingAction = "band"
-                        showConfirm = true
-                    } label: {
-                        HStack {
-                            Spacer()
-                            if busy { ProgressView().padding(.trailing, 6) }
-                            Text(busy ? "应用中…" : "应用频段锁定")
-                                .font(.system(size: 15, weight: .semibold))
-                            Spacer()
-                        }
-                    }
-                    .disabled(busy)
-                    .haptic(.medium)
-                }
-
-                Section {
-                    Toggle("启用运营商锁定", isOn: $carrierEnabled)
-                    if carrierEnabled {
-                        HStack {
-                            Text("运营商代码")
-                            Spacer()
-                            TextField("46001", text: $carrierSerial)
-                                .keyboardType(.numberPad)
-                                .multilineTextAlignment(.trailing)
-                                .frame(width: 100)
-                        }
-                    }
-                    Button {
-                        pendingAction = "carrier"
-                        showConfirm = true
-                    } label: {
-                        Text("应用运营商锁定")
-                            .font(.system(size: 15, weight: .semibold))
-                            .frame(maxWidth: .infinity)
-                    }
-                    .disabled(busy)
-                } header: {
-                    Text("运营商锁定")
-                } footer: {
-                    Text("联通 46001 · 移动 46000 · 电信 46011")
-                }
+                .padding(.horizontal, 14)
+                .padding(.top, 8)
+                .padding(.bottom, 30)
             }
-            .glassListStyle()
+            .background(GlassListBackground())
             .navigationTitle("锁频")
             }
             .task { loadCurrent() }
@@ -133,22 +53,192 @@ struct LockBandView: View {
         }
     }
 
-    private func bandRow(_ label: String, selected: Bool,
-                         action: @escaping () -> Void) -> some View {
-        Button(action: {
-            Haptic.selection()
-            action()
-        }) {
+    // MARK: 当前状态
+
+    private var currentCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(label).foregroundStyle(.primary)
+                Text("当前状态")
+                    .font(.system(size: 13, weight: .semibold))
                 Spacer()
-                if selected {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(.blue)
+                Text(lockEnabled ? "已锁定" : "自动")
+                    .font(.system(size: 10.5, weight: .bold))
+                    .foregroundStyle(lockEnabled ? .orange : .secondary)
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(Capsule().fill((lockEnabled ? Color.orange : Color.secondary).opacity(0.12)))
+            }
+
+            HStack(spacing: 0) {
+                statItem("频段", "N" + (s["band"].isEmpty ? "--" : s["band"]))
+                Divider().frame(height: 26)
+                statItem("PCI", s["pci"].isEmpty ? "--" : s["pci"])
+                Divider().frame(height: 26)
+                statItem("带宽", s["bw"].isEmpty ? "--" : s["bw"])
+            }
+
+            if lockEnabled {
+                Text("已锁：5G \(selectedNR.isEmpty ? "全部" : selectedNR.sorted().map { "n\($0)" }.joined(separator: " "))"
+                     + " · 4G \(selectedLTE.isEmpty ? "全部" : selectedLTE.sorted().map { "B\($0)" }.joined(separator: " "))")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(14)
+        .glassCard(radius: 18)
+    }
+
+    private func statItem(_ title: String, _ value: String) -> some View {
+        VStack(spacing: 2) {
+            Text(title).font(.system(size: 10)).foregroundStyle(.secondary)
+            Text(value).font(.system(size: 16, weight: .bold))
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    // MARK: 模式
+
+    private var modeCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("锁定方式")
+                .font(.system(size: 13, weight: .semibold))
+
+            Picker("", selection: $lockEnabled) {
+                Text("自动（不锁定）").tag(false)
+                Text("频段锁定").tag(true)
+            }
+            .pickerStyle(.segmented)
+
+            Text(lockEnabled
+                 ? "设备只在你勾选的频段上工作。勾得越少越容易失去信号。"
+                 : "由基站自由调度，信号变化时自动切换。")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .glassCard(radius: 18)
+    }
+
+    // MARK: 频段网格
+
+    private var bandGridCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            group("5G NR", bands: nrBands, selected: selectedNR, prefix: "n") { toggleNR($0) }
+            Divider().opacity(0.4)
+            group("4G LTE", bands: lteBands, selected: selectedLTE, prefix: "B") { toggleLTE($0) }
+        }
+        .padding(14)
+        .glassCard(radius: 18)
+        .opacity(lockEnabled ? 1 : 0.5)
+        .allowsHitTesting(lockEnabled)
+    }
+
+    private func group(_ title: String, bands: [Int], selected: Set<Int>,
+                       prefix: String, onTap: @escaping (Int) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title).font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Text("\(selected.count)/\(bands.count)")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 7), count: 4),
+                      spacing: 7) {
+                ForEach(bands, id: \.self) { b in
+                    let on = selected.contains(b)
+                    Button {
+                        Haptic.selection()
+                        onTap(b)
+                    } label: {
+                        Text(prefix + "\(b)")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(on ? .white : Color.primary.opacity(0.7))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 34)
+                            .background(
+                                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                    .fill(on ? Color.blue : Color.primary.opacity(0.06))
+                            )
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
+    }
+
+    // MARK: 运营商
+
+    private var carrierCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle("运营商锁定", isOn: $carrierEnabled)
+                .font(.system(size: 13, weight: .semibold))
+
+            if carrierEnabled {
+                HStack {
+                    Text("运营商代码").font(.system(size: 12))
+                    Spacer()
+                    TextField("46001", text: $carrierSerial)
+                        .keyboardType(.numberPad)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 100)
+                        .font(.system(size: 13))
+                }
+                Text("联通 46001 · 移动 46000 · 电信 46011")
+                    .font(.system(size: 10.5)).foregroundStyle(.secondary)
+
+                Button {
+                    pendingAction = "carrier"
+                    showConfirm = true
+                } label: {
+                    Text("应用运营商锁定")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 36)
+                        .background(RoundedRectangle(cornerRadius: 10).fill(Color.blue.opacity(0.12)))
+                }
+                .buttonStyle(.plain)
+                .disabled(busy)
+            }
+        }
+        .padding(14)
+        .glassCard(radius: 18)
+    }
+
+    // MARK: 提交
+
+    private var applyBar: some View {
+        Button {
+            pendingAction = "band"
+            showConfirm = true
+        } label: {
+            HStack(spacing: 6) {
+                if busy { ProgressView().tint(.white).scaleEffect(0.8) }
+                Text(busy ? "应用中…" : (lockEnabled ? "写入锁频配置" : "解除全部锁定"))
+                    .font(.system(size: 15, weight: .semibold))
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .frame(height: 48)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(lockEnabled ? Color.blue : Color.orange)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(busy)
+    }
+
+    private var hints: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Label("锁定后设备会重新搜网，期间断线十几秒", systemImage: "info.circle")
+            Label("如果锁定的频段当前不可用，会一直没有信号", systemImage: "exclamationmark.triangle")
+            Label("锁错了回到这一页选「自动」再写入即可恢复", systemImage: "arrow.uturn.backward")
+        }
+        .font(.system(size: 10.5))
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 4)
     }
 
     private func toggleNR(_ b: Int) {
@@ -210,81 +300,41 @@ struct SmsView: View {
     @State private var showCompose = false
     @State private var composeTo = ""
     @State private var composeText = ""
+    @State private var sending = false
 
     var body: some View {
         NavigationStack {
             WideAdapter(maxWidth: 560) {
-            Group {
-                if loading && list.isEmpty {
-                    ProgressView("读取中…").frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if list.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "message")
-                            .font(.system(size: 44))
-                            .foregroundStyle(.secondary.opacity(0.6))
-                        Text("暂无短信").font(.system(size: 17, weight: .semibold))
-                        Text("收件箱是空的")
-                            .font(.system(size: 13)).foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    List(list) { m in
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack {
-                                Text(m.sender.isEmpty ? "未知号码" : m.sender)
-                                    .font(.system(size: 14, weight: .semibold))
-                                Spacer()
-                                Text(m.time)
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Text(m.content)
-                                .font(.system(size: 13))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(4)
-
-                            // 验证码一键复制
-                            if let code = verificationCode(m.content) {
-                                Button {
-                                    Haptic.success()
-                                    UIPasteboard.general.string = code
-                                    store.toast("已复制验证码 \(code)", kind: .success)
-                                } label: {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "doc.on.doc")
-                                            .font(.system(size: 9))
-                                        Text("复制验证码 \(code)")
-                                            .font(.system(size: 11, weight: .medium))
-                                    }
-                                    .foregroundStyle(.blue)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(Capsule().fill(Color.blue.opacity(0.10)))
-                                }
-                                .buttonStyle(.plain)
+                ScrollView {
+                    VStack(spacing: 10) {
+                        if loading && list.isEmpty {
+                            ProgressView().padding(.top, 60)
+                        } else if list.isEmpty {
+                            emptyView
+                        } else {
+                            header
+                            ForEach(list) { m in
+                                row(m)
                             }
                         }
-                        .padding(.vertical, 3)
                     }
-                    .refreshable { await load() }
+                    .padding(.horizontal, 14)
+                    .padding(.top, 8)
+                    .padding(.bottom, 30)
                 }
-            }
-            .glassListStyle()
-            .navigationTitle("短信")
+                .background(GlassListBackground())
+                .refreshable { await load() }
+                .navigationTitle("短信")
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
+                        Haptic.light()
+                        composeTo = ""
+                        composeText = ""
                         showCompose = true
                     } label: {
                         Image(systemName: "square.and.pencil")
-                    }
-                }
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        Task { await load() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
                     }
                 }
             }
@@ -295,18 +345,139 @@ struct SmsView: View {
         }
     }
 
-    /// 从短信里提取 4-8 位验证码
-    private func verificationCode(_ s: String) -> String? {
-        let lower = s.lowercased()
-        guard lower.contains("验证码") || lower.contains("校验码")
-                || lower.contains("动态码") || lower.contains("验证代码")
-                || lower.contains("code") else { return nil }
-        guard let re = try? NSRegularExpression(pattern: "(?<![0-9])([0-9]{4,8})(?![0-9])") else { return nil }
-        let range = NSRange(s.startIndex..., in: s)
-        guard let m = re.firstMatch(in: s, range: range),
-              let r = Range(m.range(at: 1), in: s) else { return nil }
-        return String(s[r])
+    // MARK: 头部
+
+    private var header: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "tray.full")
+                .font(.system(size: 11))
+            Text("共 \(list.count) 条")
+                .font(.system(size: 11.5))
+            Spacer()
+            if !codesCount.isEmpty {
+                Text("\(codesCount) 条含验证码")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.blue)
+            }
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 4)
     }
+
+    private var codesCount: [String] {
+        list.compactMap { verificationCode($0.content) }
+    }
+
+    private var emptyView: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "message")
+                .font(.system(size: 40, weight: .light))
+                .foregroundStyle(.secondary.opacity(0.4))
+            Text("收件箱是空的")
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
+            Text("下拉可重新读取")
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary.opacity(0.7))
+        }
+        .padding(.top, 70)
+    }
+
+    // MARK: 单条
+
+    private func row(_ m: CpeSms) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 9) {
+                // 首字头像
+                Text(avatarText(m.sender))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(avatarColor(m.sender)))
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(m.sender.isEmpty ? "未知号码" : m.sender)
+                        .font(.system(size: 14, weight: .semibold))
+                        .lineLimit(1)
+                    Text(m.time.isEmpty ? "时间未知" : shortTime(m.time))
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+            }
+
+            Text(m.content)
+                .font(.system(size: 13))
+                .foregroundStyle(.primary.opacity(0.85))
+                .lineLimit(4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let code = verificationCode(m.content) {
+                Button {
+                    Haptic.success()
+                    UIPasteboard.general.string = code
+                    store.toast("已复制验证码 \(code)", kind: .success)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 10))
+                        Text("复制验证码 \(code)")
+                            .font(.system(size: 11.5, weight: .medium))
+                    }
+                    .foregroundStyle(.blue)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(Color.blue.opacity(0.10)))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(12)
+        .glassCard(radius: 16)
+        .contextMenu {
+            Button {
+                UIPasteboard.general.string = m.content
+                store.toast("已复制内容", kind: .success)
+            } label: { Label("复制内容", systemImage: "doc.on.doc") }
+
+            Button {
+                UIPasteboard.general.string = m.sender
+                store.toast("已复制号码", kind: .success)
+            } label: { Label("复制号码", systemImage: "phone") }
+
+            Button {
+                composeTo = m.sender
+                composeText = ""
+                showCompose = true
+            } label: { Label("回复", systemImage: "arrowshape.turn.up.left") }
+        }
+    }
+
+    private func avatarText(_ sender: String) -> String {
+        let t = sender.trimmingCharacters(in: .whitespaces)
+        if t.isEmpty { return "?" }
+        return String(t.prefix(1))
+    }
+
+    private func avatarColor(_ sender: String) -> Color {
+        let palette: [Color] = [.blue, .green, .orange, .purple, .teal, .pink]
+        let h = abs(sender.hashValue)
+        return palette[h % palette.count]
+    }
+
+    private func shortTime(_ s: String) -> String {
+        // 2024-01-02 12:34:56 → 01-02 12:34
+        let chars = Array(s)
+        if chars.count >= 16 {
+            let a = String(chars[5..<10])
+            let b = String(chars[11..<16])
+            return a + " " + b
+        }
+        return s
+    }
+
+    // MARK: 发送
 
     private var composeSheet: some View {
         NavigationStack {
@@ -323,9 +494,14 @@ struct SmsView: View {
                     Button {
                         sendSms()
                     } label: {
-                        Text("发送").frame(maxWidth: .infinity)
+                        HStack {
+                            Spacer()
+                            if sending { ProgressView().padding(.trailing, 6) }
+                            Text(sending ? "发送中…" : "发送")
+                            Spacer()
+                        }
                     }
-                    .disabled(composeTo.isEmpty || composeText.isEmpty)
+                    .disabled(sending || composeTo.isEmpty || composeText.isEmpty)
                 }
             }
             .navigationTitle("发送短信")
@@ -342,16 +518,21 @@ struct SmsView: View {
         loading = true
         defer { loading = false }
         list = await store.fetchSms()
-        if list.isEmpty { store.toast("暂无短信", kind: .info) }
     }
 
     private func sendSms() {
+        sending = true
         Task {
-            _ = await store.sendSms(to: composeTo, text: composeText)
-            store.toast("短信已发送", kind: .success)
-            composeTo = ""
-            composeText = ""
-            showCompose = false
+            let ok = await store.sendSms(to: composeTo, text: composeText)
+            sending = false
+            store.toast(ok ? "短信已发送" : "发送失败，请检查信号与号码",
+                        kind: ok ? .success : .error)
+            if ok {
+                composeTo = ""
+                composeText = ""
+                showCompose = false
+                await load()
+            }
         }
     }
 }
