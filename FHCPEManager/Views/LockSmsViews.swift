@@ -242,6 +242,27 @@ struct SmsView: View {
                                 .font(.system(size: 13))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(4)
+
+                            // 验证码一键复制
+                            if let code = verificationCode(m.content) {
+                                Button {
+                                    Haptic.success()
+                                    UIPasteboard.general.string = code
+                                    store.toast("已复制验证码 \(code)", kind: .success)
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "doc.on.doc")
+                                            .font(.system(size: 9))
+                                        Text("复制验证码 \(code)")
+                                            .font(.system(size: 11, weight: .medium))
+                                    }
+                                    .foregroundStyle(.blue)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(Capsule().fill(Color.blue.opacity(0.10)))
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
                         .padding(.vertical, 3)
                     }
@@ -272,6 +293,19 @@ struct SmsView: View {
             }
             .task { await load() }
         }
+    }
+
+    /// 从短信里提取 4-8 位验证码
+    private func verificationCode(_ s: String) -> String? {
+        let lower = s.lowercased()
+        guard lower.contains("验证码") || lower.contains("校验码")
+                || lower.contains("动态码") || lower.contains("验证代码")
+                || lower.contains("code") else { return nil }
+        guard let re = try? NSRegularExpression(pattern: "(?<![0-9])([0-9]{4,8})(?![0-9])") else { return nil }
+        let range = NSRange(s.startIndex..., in: s)
+        guard let m = re.firstMatch(in: s, range: range),
+              let r = Range(m.range(at: 1), in: s) else { return nil }
+        return String(s[r])
     }
 
     private var composeSheet: some View {
