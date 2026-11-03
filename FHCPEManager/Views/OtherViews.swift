@@ -20,18 +20,20 @@ struct ControlView: View {
                 VStack(spacing: 14) {
                     statusBanner
 
-                    // 2×2 开关卡片（一屏可见，无需滚动）
-                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 10),
-                                        GridItem(.flexible(), spacing: 10)],
-                              spacing: 10) {
-                        switchCard("飞行模式", "airplane",
-                                   CpeNode.netSet + "airplan_on", "airplane", .orange)
-                        switchCard("数据漫游", "roaming",
-                                   CpeNode.netSet + "RoamingEnable", "roaming", .blue)
-                        switchCard("VoLTE", "volte",
-                                   CpeNode.netSet + "volte_switch", "volte", .green)
-                        switchCard("载波聚合", "ca",
-                                   "X_FH_MobileNetwork.NetworkInfo.CaEnable", "ca", .purple)
+                    // 开关列表（华为同款横排卡片）
+                    VStack(spacing: 10) {
+                        switchRow("飞行模式", "关闭蜂窝与 Wi-Fi 之外的所有无线发射",
+                                  CpeNode.netSet + "airplan_on",
+                                  "airplane", .orange)
+                        switchRow("数据漫游", "绑定允许在国内网络以外使用数据",
+                                  CpeNode.netSet + "RoamingEnable",
+                                  "globetrotter", .blue)
+                        switchRow("VoLTE", "通话时保持 4G/5G 数据连接",
+                                  CpeNode.netSet + "volte_switch",
+                                  "phone.connection", .green)
+                        switchRow("载波聚合", "多个载波同时传输，提升峰值速率",
+                                  "X_FH_MobileNetwork.NetworkInfo.CaEnable",
+                                  "arrow.triangle.merge", .purple)
                     }
 
                     rebootButton
@@ -95,46 +97,61 @@ struct ControlView: View {
         .glassCard(radius: 16)
     }
 
-    private func switchCard(_ title: String, _ key: String, _ node: String,
-                            _ icon: String, _ tint: Color) -> some View {
-        let raw = (localOverride[node] ?? (s[key].lowercased() == "1"
-                 || s[key].lowercased() == "true")).description
-        let isOn = raw == "true"
+    /// 开关行（华为同款：图标 + 标题 + 副标题 + 右侧胶囊）
+    private func switchRow(_ title: String, _ subtitle: String, _ node: String,
+                           _ icon: String, _ tint: Color) -> some View {
+        let isOn = localOverride[node] ?? (s[keyFor(node)].lowercased() == "1"
+                 || s[keyFor(node)].lowercased() == "true")
         let busy = busyNode == node
 
         return Button {
+            Haptic.light()
             pendingToggle = (node, !isOn, title)
         } label: {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Image(systemName: icon)
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(isOn ? tint : Color.secondary)
-                    Spacer()
-                    if busy {
-                        ProgressView().scaleEffect(0.7)
-                    } else {
-                        Text(isOn ? "开" : "关")
-                            .font(.system(size: 10.5, weight: .bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 8).padding(.vertical, 3)
-                            .background(Capsule().fill(isOn ? tint : Color.secondary.opacity(0.3)))
-                    }
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(isOn ? tint : .secondary)
+                    .frame(width: 38, height: 38)
+                    .background(Circle().fill((isOn ? tint : Color.secondary).opacity(0.12)))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Text(subtitle)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-                Text(title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.primary)
-                Text(isOn ? "已开启" : "已关闭")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(isOn ? tint : Color.secondary)
+
+                Spacer(minLength: 6)
+
+                if busy {
+                    ProgressView().scaleEffect(0.75)
+                } else {
+                    Text(isOn ? "已开启" : "已关闭")
+                        .font(.system(size: 10.5, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(isOn ? tint : Color.secondary.opacity(0.45)))
+                }
             }
-            .padding(13)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: 104)
+            .padding(14)
             .glassCard(radius: 18)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .haptic(.medium)
+    }
+
+    /// 节点路径 → 状态字段名
+    private func keyFor(_ node: String) -> String {
+        if node.hasSuffix("airplan_on") { return "airplane" }
+        if node.hasSuffix("RoamingEnable") { return "roaming" }
+        if node.hasSuffix("volte_switch") { return "volte" }
+        if node.hasSuffix("CaEnable") { return "ca" }
+        return ""
     }
 
     private var rebootButton: some View {
@@ -283,10 +300,12 @@ struct ParamView: View {
     private func infoCard(_ title: String, icon: String,
                           rows: [(String, String, Bool)]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
+            HStack(spacing: 7) {
                 Image(systemName: icon)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.blue)
+                    .frame(width: 24, height: 24)
+                    .background(Circle().fill(Color.blue.opacity(0.12)))
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
                 Spacer()
