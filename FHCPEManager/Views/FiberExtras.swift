@@ -81,6 +81,7 @@ struct FiberExtrasSection: View {
     @State private var releaseDelay = FiberExtras.releaseDelay
     @State private var rebootOn = FiberExtras.rebootOn
     @State private var rebootTime = FiberExtras.rebootTime
+    @State private var showFactory = false
 
     var body: some View {
         Section {
@@ -149,6 +150,29 @@ struct FiberExtrasSection: View {
             if rebootOn {
                 Text("iOS 不允许 App 在后台定时执行，所以只有 App 打开时才会触发。建议配合「屏幕常亮」使用。")
             }
+        }
+
+        Section {
+            Button(role: .destructive) {
+                Haptic.warning()
+                showFactory = true
+            } label: {
+                Text("恢复出厂设置")
+            }
+        } footer: {
+            Text("名称、密码、锁频等全部配置都会清空，且无法撤销。")
+        }
+        .alert("恢复出厂设置", isPresented: $showFactory) {
+            Button("取消", role: .cancel) { }
+            Button("恢复", role: .destructive) {
+                Task {
+                    let ok = await store.factoryReset()
+                    store.toast(ok ? "恢复出厂指令已下发" : "操作失败",
+                                kind: ok ? .success : .error)
+                }
+            }
+        } message: {
+            Text("名称、密码、锁频等全部配置都会清空，且无法撤销。\n\n设备重启期间所有终端都会断网。")
         }
     }
 
