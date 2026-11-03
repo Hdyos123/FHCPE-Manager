@@ -15,7 +15,6 @@ struct LoginView: View {
     @State private var busy = false
     @State private var remember = true
     @State private var autoLogin = true
-    @AppStorage("autoScanOnOpen") private var autoScanOnOpen = true
     @State private var logs: [String] = []
     @State private var showLogs = true
     @State private var detecting = false
@@ -59,20 +58,9 @@ struct LoginView: View {
                 addLog("上次设备：\(p.vendor.displayName) @ \(p.host)")
             }
 
-            if autoScanOnOpen {
-                // 扫描当前实际连的是哪台，不同就自动切换
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                await autoDetect(preferred: saved)
-            } else {
-                // 不扫描：直接用记忆的设备，最快速度登录
-                addLog("已关闭自动检测，使用上次设备")
-                if let p = saved, !p.password.isEmpty, autoLogin, !busy {
-                    addLog("  自动登录…")
-                    await doConnect()
-                } else if saved == nil {
-                    addLog("  没有可用记录，请手动填写")
-                }
-            }
+            // 打开即静默识别当前设备（无按钮，用户无感）
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            await autoDetect(preferred: saved)
         }
         .sheet(isPresented: $showVendorPicker) {
             VendorPicker(current: vendor, onSelect: selectVendor)
@@ -171,31 +159,6 @@ struct LoginView: View {
                 }
                 .buttonStyle(.plain)
 
-                // 自动检测按钮
-                Button {
-                    Task { await autoDetect() }
-                } label: {
-                    HStack(spacing: 6) {
-                        if detecting {
-                            ProgressView().scaleEffect(0.7)
-                        } else {
-                            Image(systemName: "antenna.radiowaves.left.and.right")
-                                .font(.system(size: 12, weight: .medium))
-                        }
-                        Text(detecting ? "正在扫描局域网…" : (vendor == nil ? "自动检测设备" : "重新检测"))
-                            .font(.system(size: 13, weight: .medium))
-                    }
-                    .foregroundStyle(.blue)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 40)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.blue.opacity(scheme == .dark ? 0.14 : 0.09))
-                    )
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(detecting)
             }
 
             fieldBlock("管理地址", placeholder: "请先选择设备厂商",
@@ -269,23 +232,6 @@ struct LoginView: View {
             }
             .padding(.top, 2)
 
-            Divider().opacity(0.35)
-
-            Toggle(isOn: Binding(
-                get: { autoScanOnOpen },
-                set: { autoScanOnOpen = $0; Haptic.light() }
-            )) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("打开时自动检测设备")
-                        .font(.system(size: 14))
-                    Text(autoScanOnOpen
-                         ? "扫描局域网，自动识别当前连的是哪台"
-                         : "跳过扫描，直接用上次的设备信息快速登录")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .tint(.green)
 
             // 连接按钮
             Button {
