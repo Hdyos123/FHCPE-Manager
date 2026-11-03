@@ -843,6 +843,25 @@ final class CpeStore: ObservableObject {
         detectedProfile = nil
     }
 
+    /// 恢复出厂（烽火）
+    func factoryReset() async -> Bool {
+        if isHuawei { return await HuaweiAPI.shared.factoryReset() }
+        guard isFiberHome else { return false }
+        if useNative {
+            do {
+                try await CpeNativeAPI.shared.runCommand("RESTORE_DEFAULT_WEB")
+                return true
+            } catch {
+                diagLog += "原生恢复出厂失败，尝试桥接…\n"
+            }
+        }
+        if bridge.ready {
+            return await bridge.runCommand("RESTORE_DEFAULT_WEB")
+        }
+        diagLog += "烽火未连接，无法恢复出厂\n"
+        return false
+    }
+
     /// 锁小区（仅华为）
     func applyCellLock(password: String, arfcn: String, pci: String, act: String = "1") async -> Bool {
         guard isHuawei else { return false }
