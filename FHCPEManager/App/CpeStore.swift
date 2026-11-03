@@ -843,6 +843,15 @@ final class CpeStore: ObservableObject {
         detectedProfile = nil
     }
 
+    /// 锁小区（仅华为）
+    func applyCellLock(password: String, arfcn: String, pci: String, act: String = "1") async -> Bool {
+        guard isHuawei else { return false }
+        return await HuaweiAPI.shared.applyCellLock(password: password,
+                                                    arfcn: arfcn,
+                                                    pci: pci,
+                                                    act: act)
+    }
+
     /// 重启设备：按厂商分流
     func reboot() async -> Bool {
         if isHuawei { return await HuaweiAPI.shared.reboot() }
