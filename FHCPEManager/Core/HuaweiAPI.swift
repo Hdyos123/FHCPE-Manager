@@ -98,7 +98,7 @@ final class HuaweiAPI {
     fileprivate(set) var user: String = "admin"
 
     /// 最近一次登录用的凭据（用于自动重登）
-    fileprivate(set) var password: String = ""
+    internal var password: String = ""
 
     // MARK: 配置
 
