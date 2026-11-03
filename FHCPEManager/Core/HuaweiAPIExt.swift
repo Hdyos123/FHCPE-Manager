@@ -224,6 +224,42 @@ extension HuaweiAPI {
         }
     }
 
+    // MARK: 锁小区（需要开发者权限）
+
+    /// 申请开发者权限（用同一个管理员密码重登）
+    func enterDeveloper(password pwd: String) async -> Bool {
+        let body = "<request><user>\(user)</user><password>\(Self.escape(pwd))</password></request>"
+        do {
+            let n = try await request("POST", "/api/user/enter_developer", body: body)
+            if let ok = n.text("success") { return ok == "true" || ok == "1" }
+            return n.find("error") == nil
+        } catch {
+            lastErrorText = msg(error)
+            return false
+        }
+    }
+
+    /// 写入锁小区：arfcn + pci
+    func applyCellLock(password pwd: String, arfcn: String, pci: String, act: String) async -> Bool {
+        guard !arfcn.isEmpty, !pci.isEmpty else {
+            lastErrorText = "频点和 PCI 都要填"
+            return false
+        }
+        // 先申请开发者权限
+        _ = await enterDeveloper(password: pwd)
+
+        let body = """
+        <request>\n<NRCellLock>\n<act>\(act)</act>\n<arfcn>\(arfcn)</arfcn>\n<pci>\(pci)</pci>\n</NRCellLock>\n</request>\n
+        """
+        do {
+            _ = try await request("POST", "/api/net/lock-freq", body: body)
+            return true
+        } catch {
+            lastErrorText = msg(error)
+            return false
+        }
+    }
+
     // MARK: 信号灯定时
 
     func setLedTiming(enable: Bool, start: String, end: String) async -> Bool {
