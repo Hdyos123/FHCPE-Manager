@@ -454,19 +454,6 @@ struct SettingsView: View {
                     Text("数据刷新")
                 }
 
-                // ── 通知（所有设备）──
-                NotifySection()
-
-                // ── 华为设备设置（仅华为显示）──
-                if store.isHuawei {
-                    HuaweiSettingsSection()
-                }
-
-                // ── 烽火增强（仅烽火显示）──
-                if store.isFiberHome {
-                    FiberExtrasSection()
-                }
-
                 // ── 显示 ──
                 Section {
                     Toggle(isOn: Binding(
@@ -484,6 +471,17 @@ struct SettingsView: View {
                     Text("显示")
                 } footer: {
                     Text("分屏挂机看流量时建议开启，否则系统会自动锁屏暂停刷新。")
+                }
+
+                // ── 通知（所有设备）──
+                NotifySection()
+
+                // ── 设备维护（按厂商）──
+                if store.isHuawei {
+                    HuaweiSettingsSection()
+                }
+                if store.isFiberHome {
+                    FiberExtrasSection()
                 }
 
                 // ── 连接诊断 ──
