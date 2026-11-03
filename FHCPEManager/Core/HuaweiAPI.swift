@@ -90,15 +90,15 @@ final class HuaweiAPI {
 
     private(set) var host: String = ""
     private(set) var loggedIn = false
-    private(set) var lastErrorText: String = ""
+    internal var lastErrorText: String = ""
 
     private var sessionCookie: String = ""
     private var token: String = ""
     private var session: URLSession!
-    private var user: String = "admin"
+    fileprivate(set) var user: String = "admin"
 
     /// 最近一次登录用的凭据（用于自动重登）
-    private var password: String = ""
+    fileprivate(set) var password: String = ""
 
     // MARK: 配置
 
@@ -281,7 +281,7 @@ final class HuaweiAPI {
     }
 
     /// 请求并检查 error 节点
-    private func request(_ method: String, _ path: String, body: String? = nil) async throws -> XMLNode {
+    internal func request(_ method: String, _ path: String, body: String? = nil) async throws -> XMLNode {
         let node = try await rawRequest(method, path, body: body)
         try Self.throwIfError(node)
         return node
