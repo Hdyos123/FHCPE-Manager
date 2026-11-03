@@ -381,6 +381,24 @@ final class CpeBridge: NSObject, ObservableObject {
         return arr
     }
 
+    /// 在页面里执行任意 JS（可以使用页面自己的 $post / $multipost / x_* 常量）
+    /// 返回 JSON 字符串；失败返回 nil
+    func evalJSON(_ js: String) async -> String? {
+        guard ready else { return nil }
+        let body = """
+        function(){
+          try {
+            var r = (function(){ \(js) })();
+            if (r && typeof r.then === 'function') {
+              return r.then(function(v){ return (typeof v === 'string') ? v : JSON.stringify(v); });
+            }
+            return (typeof r === 'string') ? r : JSON.stringify(r);
+          } catch(e) { return 'ERR:' + e.message; }
+        }
+        """
+        return await jsCall(body) as? String
+    }
+
     /// multipost 的原始返回（保留 data_1 / data_2）
     func multipostRaw(_ method: String, _ data: [String: Any]) async -> [String: Any] {
         let dj = (try? JSONSerialization.data(withJSONObject: data)) ?? Data("{}".utf8)
