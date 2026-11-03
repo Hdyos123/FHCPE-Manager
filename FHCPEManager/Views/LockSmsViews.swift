@@ -468,9 +468,10 @@ struct SmsView: View {
             if !store.smsDebug.isEmpty {
                 Text(store.smsDebug)
                     .font(.system(size: 9.5, design: .monospaced))
-                    .foregroundStyle(.secondary.opacity(0.55))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 20)
+                    .foregroundStyle(.secondary.opacity(0.7))
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
                     .padding(.top, 6)
                     .textSelection(.enabled)
             }
