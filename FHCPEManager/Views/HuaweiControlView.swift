@@ -23,7 +23,11 @@ struct HuaweiControlView: View {
                     statusBanner
                     mobileDataCard
                     quickActions
+                    turboCard
+                    wanCard
+                    wanBindCard
                     timedRebootCard
+                    upgradeCard
                 }
                 .padding(.horizontal, 14)
                 .padding(.top, 8)
@@ -66,7 +70,7 @@ struct HuaweiControlView: View {
 
     // MARK: 状态
 
-    private var statusBanner: some View {
+    internal var statusBanner: some View {
         HStack(spacing: 10) {
             Circle()
                 .fill(s["connStatus"] == "901" ? Color.green : Color.orange)
@@ -103,7 +107,7 @@ struct HuaweiControlView: View {
 
     // MARK: 移动数据
 
-    private var mobileDataCard: some View {
+    internal var mobileDataCard: some View {
         Button {
             Haptic.medium()
             let target = !mobileData
@@ -157,7 +161,7 @@ struct HuaweiControlView: View {
 
     // MARK: 快捷操作
 
-    private var quickActions: some View {
+    internal var quickActions: some View {
         HStack(spacing: 10) {
             actionCard("重启设备", "power", .red) {
                 showReboot = true
@@ -191,7 +195,7 @@ struct HuaweiControlView: View {
 
     // MARK: 定时重启
 
-    private var timedRebootCard: some View {
+    internal var timedRebootCard: some View {
         Button {
             Haptic.light()
             showTimed = true
