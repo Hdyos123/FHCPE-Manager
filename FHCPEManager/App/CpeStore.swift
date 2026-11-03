@@ -666,7 +666,33 @@ final class CpeStore: ObservableObject {
     func fetchSms() async -> [CpeSms] {
         smsDebug = ""
 
-        // ① 桥接：直接用页面的 $multipost 和常量
+        // 烽火前端实际调用：$multipost("get_value_by_xmlnode|get_sms_data", {两个节点})
+        let query: [String: Any] = [
+            "AirplaneEnable": "InternetGatewayDevice.X_FH_NetworkSettings.AirplaneEnable",
+            "SMSDisable": "InternetGatewayDevice.X_FH_NetworkSettings.SMSDisable"
+        ]
+
+        var tried: [String] = []
+
+        // ① 原生：直接用 multipostRaw
+        if useNative {
+            if let resp = try? await CpeNativeAPI.shared.multipostRaw(
+                "get_value_by_xmlnode|get_sms_data", query) {
+                if let d = try? JSONSerialization.data(withJSONObject: resp),
+                   let t = String(data: d, encoding: .utf8) {
+                    tried.append("native:" + String(t.prefix(300)))
+                }
+                if let d = try? JSONSerialization.data(withJSONObject: resp),
+                   let t = String(data: d, encoding: .utf8),
+                   let list = Self.parseSmsResponse(t), !list.isEmpty {
+                    return list
+                }
+            } else {
+                tried.append("native 无响应")
+            }
+        }
+
+        // ② 桥接：用页面自己的常量和 $multipost
         if bridge.ready {
             let js = """
             $multipost("get_value_by_xmlnode|get_sms_data", {
@@ -675,61 +701,67 @@ final class CpeStore: ObservableObject {
             }).then(function(r){ return JSON.stringify(r); })
             """
             if let raw = await bridge.evalJSON(js) {
-                smsDebug = "bridge: " + String(raw.prefix(220))
+                tried.append("bridge len=" + String(raw.count))
                 if let list = Self.parseSmsResponse(raw), !list.isEmpty {
                     return list
                 }
             } else {
-                smsDebug = "bridge: 无响应"
+                tried.append("bridge 无响应")
             }
         } else {
-            smsDebug = "bridge 未就绪（useNative=\(useNative)）"
+            tried.append("bridge 未就绪")
         }
 
-        // ② 原生兜底
-        let query: [String: Any] = [:]
-        if useNative {
-            let resp = (try? await CpeNativeAPI.shared.multipostRaw(
-                "get_value_by_xmlnode|get_sms_data", ["data_1": query])) ?? [:]
-            smsDebug += " | native keys=" + resp.keys.sorted().joined(separator: ",")
-            if let d = try? JSONSerialization.data(withJSONObject: resp),
-               let t = String(data: d, encoding: .utf8),
-               let list = Self.parseSmsResponse(t), !list.isEmpty {
-                return list
-            }
-        }
+        smsDebug = tried.joined(separator: " | ")
         return []
     }
 
-    /// 解析 get_sms_data 的返回
-    /// data_2 = { 手机号: { message_item_N: { msg_content, time, rcvorsend, isOpened } } }
+    /// 解析 get_sms_data 的返回（结构不固定，做宽松解析）
+    /// 常见：data_2 = { 手机号: { message_item_N: {...} } }
+    /// 也有的固件：data_1 = { message_item_N: {...} }
     static func parseSmsResponse(_ raw: String) -> [CpeSms]? {
         guard let d = raw.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
+              let root = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
             return nil
         }
-        let payload = (obj["data_2"] as? [String: Any]) ?? obj
+
         var out: [CpeSms] = []
 
-        func consume(_ phone: String, _ entry: Any) {
-            guard let dict = entry as? [String: Any] else { return }
-            for (k, v) in dict where k.hasPrefix("message_item") {
-                guard let m = v as? [String: Any] else { continue }
-                let content = (m["msg_content"] as? String) ?? (m["content"] as? String) ?? ""
-                guard !content.isEmpty else { continue }
-                let time = (m["time"] as? String) ?? ""
-                out.append(CpeSms(sender: phone, content: content, time: time))
+        /// 从一段 JSON 里递归找所有 message_item
+        func scan(_ any: Any, phone: String, depth: Int) {
+            guard depth < 6 else { return }
+            if let dict = any as? [String: Any] {
+                for (k, v) in dict {
+                    if k.hasPrefix("message_item") {
+                        guard let m = v as? [String: Any] else { continue }
+                        let content = (m["msg_content"] as? String)
+                            ?? (m["content"] as? String)
+                            ?? (m["Content"] as? String) ?? ""
+                        guard !content.isEmpty else { continue }
+                        let time = (m["time"] as? String) ?? (m["date"] as? String) ?? ""
+                        out.append(CpeSms(sender: phone, content: content, time: time))
+                    } else {
+                        // 键可能是手机号
+                        let isPhone = k.contains { $0.isNumber } && k.count >= 5
+                        scan(v, phone: isPhone ? k : phone, depth: depth + 1)
+                    }
+                }
+            } else if let arr = any as? [Any] {
+                for item in arr { scan(item, phone: phone, depth: depth + 1) }
             }
         }
 
-        if let dict = payload as? [String: Any] {
-            for (k, v) in dict {
-                if let sub = v as? [String: Any] {
-                    consume(k, sub)
-                }
-            }
+        scan(root, phone: "", depth: 0)
+
+        // 去重（同一内容同一时间）
+        var seen = Set<String>()
+        let unique = out.filter { m in
+            let key = m.sender + "|" + m.time + "|" + m.content
+            if seen.contains(key) { return false }
+            seen.insert(key)
+            return true
         }
-        return out.sorted { $0.time > $1.time }
+        return unique.sorted { $0.time > $1.time }
     }
 
     private func firstString(_ row: [String: Any], _ keys: [String]) -> String {
