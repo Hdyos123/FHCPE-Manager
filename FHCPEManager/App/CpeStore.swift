@@ -657,47 +657,78 @@ final class CpeStore: ObservableObject {
         hosts = result
     }
 
-    /// 读取收件箱：烽火用专用接口 get_sms_data
-    func fetchSms() async -> [CpeSms] {
-        let query: [String: Any] = [
-            "AirplaneEnable": "InternetGatewayDevice.X_FH_NetworkSettings.AirplaneEnable",
-            "SMSDisable": "InternetGatewayDevice.X_FH_NetworkSettings.SMSDisable"
-        ]
+    /// 短信原始返回（为空时给用户看，便于定位）
+    @Published var smsDebug: String = ""
 
-        var resp: [String: Any] = [:]
-        if useNative {
-            resp = (try? await CpeNativeAPI.shared.multipostRaw(
-                "get_value_by_xmlnode|get_sms_data", query)) ?? [:]
+    /// 读取收件箱
+    /// 烽火的短信走专用接口 get_sms_data，且依赖页面里的 x_* 节点常量，
+    /// 所以优先用 WebView 桥执行页面自己的调用；失败再退回原生猜路径
+    func fetchSms() async -> [CpeSms] {
+        smsDebug = ""
+
+        // ① 桥接：直接用页面的 $multipost 和常量
+        if bridge.ready {
+            let js = """
+            $multipost("get_value_by_xmlnode|get_sms_data", {
+              AirplaneEnable: x_NetworkSettings_obj + x_NetworkSet_AirplaneEnable,
+              SMSDisable:    x_NetworkSettings_obj + x_NetworkSet_SMSDisable
+            }).then(function(r){ return JSON.stringify(r); })
+            """
+            if let raw = await bridge.evalJSON(js) {
+                smsDebug = "bridge: " + String(raw.prefix(220))
+                if let list = Self.parseSmsResponse(raw), !list.isEmpty {
+                    return list
+                }
+            } else {
+                smsDebug = "bridge: 无响应"
+            }
         } else {
-            resp = await bridge.multipostRaw("get_value_by_xmlnode|get_sms_data", query)
+            smsDebug = "bridge 未就绪（useNative=\(useNative)）"
         }
 
-        // 短信在 data_2：{ 手机号: { message_item_N: { msg_content, time, ... } } }
-        guard let d2 = resp["data_2"] else { return [] }
+        // ② 原生兜底
+        let query: [String: Any] = [:]
+        if useNative {
+            let resp = (try? await CpeNativeAPI.shared.multipostRaw(
+                "get_value_by_xmlnode|get_sms_data", ["data_1": query])) ?? [:]
+            smsDebug += " | native keys=" + resp.keys.sorted().joined(separator: ",")
+            if let d = try? JSONSerialization.data(withJSONObject: resp),
+               let t = String(data: d, encoding: .utf8),
+               let list = Self.parseSmsResponse(t), !list.isEmpty {
+                return list
+            }
+        }
+        return []
+    }
 
+    /// 解析 get_sms_data 的返回
+    /// data_2 = { 手机号: { message_item_N: { msg_content, time, rcvorsend, isOpened } } }
+    static func parseSmsResponse(_ raw: String) -> [CpeSms]? {
+        guard let d = raw.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
+            return nil
+        }
+        let payload = (obj["data_2"] as? [String: Any]) ?? obj
         var out: [CpeSms] = []
-        func handleEntry(_ phone: String, _ entry: Any) {
+
+        func consume(_ phone: String, _ entry: Any) {
             guard let dict = entry as? [String: Any] else { return }
-            for (key, value) in dict where key.hasPrefix("message_item") {
-                guard let m = value as? [String: Any] else { continue }
-                let content = (m["msg_content"] as? String)
-                    ?? (m["content"] as? String) ?? ""
-                let time = (m["time"] as? String) ?? ""
+            for (k, v) in dict where k.hasPrefix("message_item") {
+                guard let m = v as? [String: Any] else { continue }
+                let content = (m["msg_content"] as? String) ?? (m["content"] as? String) ?? ""
                 guard !content.isEmpty else { continue }
+                let time = (m["time"] as? String) ?? ""
                 out.append(CpeSms(sender: phone, content: content, time: time))
             }
         }
 
-        if let dict = d2 as? [String: Any] {
-            for (phone, entry) in dict { handleEntry(phone, entry) }
-        } else if let arr = d2 as? [[String: Any]] {
-            for item in arr {
-                let phone = (item["phone"] as? String) ?? (item["Phone"] as? String) ?? "未知号码"
-                handleEntry(phone, item)
+        if let dict = payload as? [String: Any] {
+            for (k, v) in dict {
+                if let sub = v as? [String: Any] {
+                    consume(k, sub)
+                }
             }
         }
-
-        // 按时间倒序（时间格式 yyyy-MM-dd HH:mm:ss，字符串比较即可）
         return out.sorted { $0.time > $1.time }
     }
 
