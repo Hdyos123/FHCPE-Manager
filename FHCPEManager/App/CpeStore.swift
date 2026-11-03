@@ -716,52 +716,46 @@ final class CpeStore: ObservableObject {
         return []
     }
 
-    /// 解析 get_sms_data 的返回（结构不固定，做宽松解析）
-    /// 常见：data_2 = { 手机号: { message_item_N: {...} } }
-    /// 也有的固件：data_1 = { message_item_N: {...} }
+    /// 解析 get_sms_data 的返回
+    /// 实测结构：
+    /// {
+    ///   "data_1": {"AirplaneEnable":"0","SMSDisable":"0"},
+    ///   "data_2": {
+    ///     "session_item_1": {
+    ///       "session_phone": "10010",
+    ///       "message_item_1": {"rcvorsend":"send","key_index":"...","time":"2023/10/14 13:06:57","msg_content":"我的流量","childnode":"1"},
+    ///       "message_item_2": { ... }
+    ///     },
+    ///     "session_item_2": { ... }
+    ///   }
+    /// }
     static func parseSmsResponse(_ raw: String) -> [CpeSms]? {
         guard let d = raw.data(using: .utf8),
               let root = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
             return nil
         }
+        guard let data2 = root["data_2"] as? [String: Any] else { return nil }
 
         var out: [CpeSms] = []
 
-        /// 从一段 JSON 里递归找所有 message_item
-        func scan(_ any: Any, phone: String, depth: Int) {
-            guard depth < 6 else { return }
-            if let dict = any as? [String: Any] {
-                for (k, v) in dict {
-                    if k.hasPrefix("message_item") {
-                        guard let m = v as? [String: Any] else { continue }
-                        let content = (m["msg_content"] as? String)
-                            ?? (m["content"] as? String)
-                            ?? (m["Content"] as? String) ?? ""
-                        guard !content.isEmpty else { continue }
-                        let time = (m["time"] as? String) ?? (m["date"] as? String) ?? ""
-                        out.append(CpeSms(sender: phone, content: content, time: time))
-                    } else {
-                        // 键可能是手机号
-                        let isPhone = k.contains { $0.isNumber } && k.count >= 5
-                        scan(v, phone: isPhone ? k : phone, depth: depth + 1)
-                    }
-                }
-            } else if let arr = any as? [Any] {
-                for item in arr { scan(item, phone: phone, depth: depth + 1) }
+        for (_, sessionValue) in data2 {
+            guard let session = sessionValue as? [String: Any] else { continue }
+            let phone = (session["session_phone"] as? String) ?? ""
+
+            for (key, msgValue) in session where key.hasPrefix("message_item") {
+                guard let m = msgValue as? [String: Any] else { continue }
+                let content = (m["msg_content"] as? String) ?? ""
+                guard !content.isEmpty else { continue }
+                // rcvorsend: send = 发出的，recv = 收到的
+                let dir = (m["rcvorsend"] as? String) ?? ""
+                let time = (m["time"] as? String) ?? ""
+                let displayPhone = dir == "send" ? ("发给 " + phone) : phone
+                out.append(CpeSms(sender: displayPhone, content: content, time: time))
             }
         }
 
-        scan(root, phone: "", depth: 0)
-
-        // 去重（同一内容同一时间）
-        var seen = Set<String>()
-        let unique = out.filter { m in
-            let key = m.sender + "|" + m.time + "|" + m.content
-            if seen.contains(key) { return false }
-            seen.insert(key)
-            return true
-        }
-        return unique.sorted { $0.time > $1.time }
+        // 时间格式 2023/10/14 13:06:57，字符串比较即可倒序
+        return out.sorted { $0.time > $1.time }
     }
 
     private func firstString(_ row: [String: Any], _ keys: [String]) -> String {
