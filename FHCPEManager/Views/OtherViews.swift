@@ -438,6 +438,11 @@ struct SettingsView: View {
                 // ── 通知（所有设备）──
                 NotifySection()
 
+                // ── 华为设备设置（仅华为显示）──
+                if store.isHuawei {
+                    HuaweiSettingsSection()
+                }
+
                 // ── 烽火增强（仅烽火显示）──
                 if store.isFiberHome {
                     FiberExtrasSection()
