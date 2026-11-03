@@ -6,6 +6,12 @@ struct LockBandView: View {
     @EnvironmentObject var store: CpeStore
 
     @State private var lockEnabled = false
+    @State private var mode = 0            // 0 自动 1 频段 2 频点 3 锁小区
+    @State private var freqNr = ""
+    @State private var freqLte = ""
+    @State private var cellArfcn = ""
+    @State private var cellPci = ""
+    @State private var cellAct = "1"
     @State private var selectedNR: Set<Int> = []
     @State private var selectedLTE: Set<Int> = []
     @State private var carrierEnabled = false
@@ -26,7 +32,9 @@ struct LockBandView: View {
                 VStack(spacing: 12) {
                     currentCard
                     modeCard
-                    bandGridCard
+                    if mode == 1 { bandGridCard }
+                    if mode == 2 { freqCard }
+                    if mode == 3 { cellCard }
                     carrierCard
                     applyBar
                     hints
@@ -103,21 +111,77 @@ struct LockBandView: View {
             Text("锁定方式")
                 .font(.system(size: 13, weight: .semibold))
 
-            Picker("", selection: $lockEnabled) {
-                Text("自动（不锁定）").tag(false)
-                Text("频段锁定").tag(true)
+            Picker("", selection: $mode) {
+                Text("自动").tag(0)
+                Text("频段").tag(1)
+                Text("频点").tag(2)
+                Text("锁小区").tag(3)
             }
             .pickerStyle(.segmented)
+            .onChange(of: mode) { v in lockEnabled = (v != 0) }
 
-            Text(lockEnabled
-                 ? "设备只在你勾选的频段上工作。勾得越少越容易失去信号。"
-                 : "由基站自由调度，信号变化时自动切换。")
+            Text(modeHint)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(14)
         .glassCard(radius: 18)
+    }
+
+    private var modeHint: String {
+        switch mode {
+        case 1: return "只允许使用勾选的频段，频点仍由基站决定。勾得越少越容易失去信号。"
+        case 2: return "固定在指定频点（ARFCN），不限定具体小区。多个用逗号分隔。"
+        case 3: return "固定到某个基站的某个小区（频点 + PCI），最精确也最容易失联。需要开发者权限。"
+        default: return "由基站自由调度，信号变化时自动切换。"
+        }
+    }
+
+    // MARK: 频点
+
+    private var freqCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            field("5G NR 频点（ARFCN）", $freqNr, "例如 627264")
+            field("4G LTE 频点（EARFCN）", $freqLte, "例如 1650")
+        }
+        .padding(14)
+        .glassCard(radius: 18)
+    }
+
+    // MARK: 锁小区
+
+    private var cellCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            field("频点（ARFCN）", $cellArfcn, "例如 627264")
+            field("PCI", $cellPci, "例如 96")
+
+            Text("写入前会用你的管理员密码申请开发者权限，普通登录下设备不开放这个接口。")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .glassCard(radius: 18)
+    }
+
+    private func field(_ title: String, _ text: Binding<String>, _ ph: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(.secondary)
+            TextField(ph, text: text)
+                .font(.system(size: 14))
+                .keyboardType(.numbersAndPunctuation)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .padding(.horizontal, 12)
+                .frame(height: 40)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.primary.opacity(0.05))
+                )
+        }
     }
 
     // MARK: 频段网格
@@ -215,7 +279,7 @@ struct LockBandView: View {
         } label: {
             HStack(spacing: 6) {
                 if busy { ProgressView().tint(.white).scaleEffect(0.8) }
-                Text(busy ? "应用中…" : (lockEnabled ? "写入锁频配置" : "解除全部锁定"))
+                Text(busy ? "应用中…" : (mode == 0 ? "解除全部锁定" : "写入锁频配置"))
                     .font(.system(size: 15, weight: .semibold))
             }
             .foregroundStyle(.white)
@@ -223,7 +287,7 @@ struct LockBandView: View {
             .frame(height: 48)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(lockEnabled ? Color.blue : Color.orange)
+                    .fill(mode == 0 ? Color.orange : Color.blue)
             )
         }
         .buttonStyle(.plain)
@@ -272,12 +336,31 @@ struct LockBandView: View {
             defer { busy = false }
             do {
                 if pendingAction == "band" {
-                    let ok = await store.applyBandLock(
-                        enable: lockEnabled,
-                        nr: Array(selectedNR).sorted(),
-                        lte: Array(selectedLTE).sorted())
-                    store.toast(ok ? "频段锁定已应用" : "应用失败，请检查连接",
-                                       kind: ok ? .success : .error)
+                    let ok: Bool
+                    switch mode {
+                    case 2:
+                        // 频点锁定：同一组节点，值是频点号
+                        let nr = freqNr.split(whereSeparator: { $0 == "," || $0 == "，" })
+                            .compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+                        let lte = freqLte.split(whereSeparator: { $0 == "," || $0 == "，" })
+                            .compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+                        ok = await store.applyBandLock(enable: true, nr: nr, lte: lte)
+                    case 3:
+                        // 锁小区：需要开发者权限
+                        let pwd = store.activeProfile?.password ?? Settings.load().password
+                        ok = await store.applyCellLock(password: pwd,
+                                                       arfcn: cellArfcn,
+                                                       pci: cellPci,
+                                                       act: cellAct)
+                    case 0:
+                        ok = await store.applyBandLock(enable: false, nr: [], lte: [])
+                    default:
+                        ok = await store.applyBandLock(enable: true,
+                                                       nr: Array(selectedNR).sorted(),
+                                                       lte: Array(selectedLTE).sorted())
+                    }
+                    store.toast(ok ? "已写入设备" : "写入失败，请检查连接与密码",
+                                kind: ok ? .success : .error)
                 } else {
                     let ok = await store.applyCarrierLock(
                         enable: carrierEnabled, serial: carrierSerial)
@@ -381,6 +464,16 @@ struct SmsView: View {
             Text("下拉可重新读取")
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary.opacity(0.7))
+
+            if !store.smsDebug.isEmpty {
+                Text(store.smsDebug)
+                    .font(.system(size: 9.5, design: .monospaced))
+                    .foregroundStyle(.secondary.opacity(0.55))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 6)
+                    .textSelection(.enabled)
+            }
         }
         .padding(.top, 70)
     }
