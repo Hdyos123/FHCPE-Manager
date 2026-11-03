@@ -224,6 +224,29 @@ extension HuaweiAPI {
         }
     }
 
+    // MARK: 信号灯定时
+
+    func setLedTiming(enable: Bool, start: String, end: String) async -> Bool {
+        // 华为例行接口：ledbreathswitch 控制呼吸灯，appctrlled 控制定时灭灯
+        let body = """
+        <request><LedTimeEnable>\(enable ? 1 : 0)</LedTimeEnable>        <StartTime>\(start)</StartTime><EndTime>\(end)</EndTime></request>
+        """
+        do {
+            _ = try await request("POST", "/api/led/ledtiming", body: body)
+            return true
+        } catch {
+            // 部分固件走 breathledswitch
+            do {
+                _ = try await request("POST", "/api/led/breathledswitch",
+                                      body: "<request><breathled>\(enable ? 1 : 0)</breathled></request>")
+                return true
+            } catch {
+                lastErrorText = msg(error)
+                return false
+            }
+        }
+    }
+
     // MARK: 固件升级
 
     struct UpgradeState {
