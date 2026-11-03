@@ -88,6 +88,10 @@ struct ParamTab: View {
     @EnvironmentObject var store: CpeStore
 
     var body: some View {
-        ParamView()
+        if store.isHuawei {
+            HuaweiParamView()
+        } else {
+            ParamView()
+        }
     }
 }
