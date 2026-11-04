@@ -14,6 +14,8 @@ final class CpeStore: ObservableObject {
     @Published var trafficUpdatedAt: Date?
 
     private var lastTodayTotal: Double = 0
+    /// 最近 10 秒内的流量采样：(时间, 累计字节)，用于算增量
+    private var todaySamples: [(t: Date, total: Double)] = []
     /// OPPO 累计流量基准（字节）
     private var lastOppoRx: Double = 0
     private var lastOppoTx: Double = 0
@@ -202,6 +204,7 @@ final class CpeStore: ObservableObject {
         realtimeTx = 0
         todayRxDelta = 0
         todayTxDelta = 0
+        todaySamples.removeAll()
         lastOppoRx = 0
         lastOppoTx = 0
         speedSamples.removeAll()
@@ -249,13 +252,19 @@ final class CpeStore: ObservableObject {
         do {
             try await CpeNativeAPI.shared.login()
 
-            // 登录已成功，等网络稳定后取数据（最多重试 4 次）
+            // 登录已成功，等网络稳定后取数据。
+            // 只探一个轻量节点（设备型号），避免一次性拉几十个字段导致超时。
             var probe: [String: String] = [:]
-            for attempt in 1...4 {
-                probe = (try? await CpeNativeAPI.shared.values(CpeNode.overview)) ?? [:]
+            for attempt in 1...6 {
+                probe = (try? await CpeNativeAPI.shared.values(["model": "DeviceInfo.ModelName"])) ?? [:]
                 if !probe.isEmpty { break }
-                if attempt < 4 {
-                    try? await Task.sleep(nanoseconds: 800_000_000)
+                // 也接受任意非空返回（部分固件不含 ModelName）
+                let any = (try? await CpeNativeAPI.shared.values(
+                    ["h": "DeviceInfo.Manufacturer",
+                     "s": "DeviceInfo.SerialNumber"])) ?? [:]
+                if !any.isEmpty { probe = any; break }
+                if attempt < 6 {
+                    try? await Task.sleep(nanoseconds: 600_000_000)
                 }
             }
 
@@ -487,19 +496,26 @@ final class CpeStore: ObservableObject {
         realtimeRx = status.realtimeRx
         realtimeTx = status.realtimeTx
 
-        // ── 流量增量追踪 ──
+        // ── 流量增量：滚动 10 秒窗口，显示这 10 秒产生的流量（不累加）──
         let total = status.double("todayTotal")
         if total > 0 {
-            if lastTodayTotal > 0 && total > lastTodayTotal {
-                let delta = total - lastTodayTotal
-                // 按本月上下行比例拆分增量
+            let now = Date()
+            todaySamples.append((t: now, total: total))
+            // 只保留最近 10 秒
+            todaySamples.removeAll { now.timeIntervalSince($0.t) > 10 }
+
+            if let first = todaySamples.first, todaySamples.count >= 2, total > first.total {
+                let delta = total - first.total
+                let span = max(1.0, now.timeIntervalSince(first.t))
+                // 归一化到 10 秒（采样未满 10 秒时按比例换算）
+                let normalized = delta * 10.0 / span
                 let mRx = status.double("monthRx"), mTx = status.double("monthTx")
                 let sum = mRx + mTx
                 if sum > 0 {
-                    todayRxDelta += delta * mRx / sum
-                    todayTxDelta += delta * mTx / sum
+                    todayRxDelta = normalized * mRx / sum
+                    todayTxDelta = normalized * mTx / sum
                 }
-                trafficUpdatedAt = Date()
+                trafficUpdatedAt = now
             }
             lastTodayTotal = total
         }
@@ -598,7 +614,8 @@ final class CpeStore: ObservableObject {
             "IPAddress": "IPAddress",
             "Layer2Interface": "Layer2Interface",
             "MaxDSBandwidth": "MaxDSBandwidth",
-            "MaxUSBandwidth": "MaxUSBandwidth"
+            "MaxUSBandwidth": "MaxUSBandwidth",
+            "child_node_idx": "child_node_idx"
         ])
 
         var result: [CpeHost] = []
@@ -630,8 +647,14 @@ final class CpeStore: ObservableObject {
             }
 
             seen.insert(mac)
+            // child_node_idx 有的固件不返回，此时用循环序号兜底
+            let rawIdx = r["child_node_idx"]
+            let idxVal: Int
+            if let i = rawIdx as? Int { idxVal = i }
+            else if let sIdx = rawIdx as? String, let i = Int(sIdx) { idxVal = i }
+            else { idxVal = result.count + 1 }
             result.append(CpeHost(
-                idx: String(r["child_node_idx"] as? Int ?? 0),
+                idx: String(idxVal),
                 name: display,
                 mac: mac,
                 ip: ip,
@@ -668,8 +691,8 @@ final class CpeStore: ObservableObject {
 
         // 烽火前端实际调用：$multipost("get_value_by_xmlnode|get_sms_data", {两个节点})
         let query: [String: Any] = [
-            "AirplaneEnable": "InternetGatewayDevice.X_FH_NetworkSettings.AirplaneEnable",
-            "SMSDisable": "InternetGatewayDevice.X_FH_NetworkSettings.SMSDisable"
+            "AirplaneEnable": "X_FH_NetworkSettings.AirplaneEnable",
+            "SMSDisable": "X_FH_NetworkSettings.SMSDisable"
         ]
 
         var tried: [String] = []
