@@ -54,45 +54,45 @@ private struct GlassBackdrop: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        if #available(iOS 17.0, *) {
-            Rectangle()
-                .fill(.ultraThinMaterial)
-                .layerEffect(
-                    ShaderLibrary.liquidGlassRefraction(
-                        .float2(CGSize(width: 400, height: 400)),
-                        .float(radius),
-                        .float(26),
-                        .float(strong ? 16 : 11),
-                        .float3(Float(tintRGB.0), Float(tintRGB.1), Float(tintRGB.2)),
-                        .float(scheme == .dark ? 0.16 : 0.06),
-                        .float(.pi * 1.25)
-                    ),
-                    maxSampleOffset: CGSize(width: 24, height: 24)
-                )
-                .overlay {
+        GeometryReader { geo in
+            let size = geo.size
+            ZStack {
+                if #available(iOS 17.0, *) {
                     Rectangle()
-                        .fill(scheme == .dark
-                              ? Color.white.opacity(0.035)
-                              : Color.white.opacity(0.34))
+                        .fill(.ultraThinMaterial)
+                        .layerEffect(
+                            ShaderLibrary.liquidGlassRefraction(
+                                .float2(Float(size.width), Float(size.height)),
+                                .float(radius),
+                                .float(26),
+                                .float(strong ? 16 : 11),
+                                .float3(Float(tintRGB.0), Float(tintRGB.1), Float(tintRGB.2)),
+                                .float(scheme == .dark ? 0.16 : 0.06),
+                                .float(.pi * 1.25)
+                            ),
+                            maxSampleOffset: CGSize(width: 24, height: 24)
+                        )
+                } else {
+                    Rectangle()
+                        .fill(.ultraThinMaterial)
                 }
-        } else {
-            RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .overlay {
-                    RoundedRectangle(cornerRadius: radius, style: .continuous)
-                        .fill(scheme == .dark
-                              ? Color.white.opacity(0.06)
-                              : Color.white.opacity(0.45))
-                }
-                .overlay {
-                    RoundedRectangle(cornerRadius: radius, style: .continuous)
-                        .fill(LinearGradient(
-                            colors: [
-                                Color.white.opacity(scheme == .dark ? 0.10 : 0.55),
-                                .clear, .clear
-                            ],
-                            startPoint: .topLeading, endPoint: .bottomTrailing))
-                }
+
+                // 提亮/压暗，让玻璃有实体感
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .fill(scheme == .dark
+                          ? Color.white.opacity(strong ? 0.055 : 0.032)
+                          : Color.white.opacity(strong ? 0.50 : 0.38))
+
+                // 对角高光
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .fill(LinearGradient(
+                        colors: [
+                            Color.white.opacity(scheme == .dark ? 0.09 : 0.50),
+                            .clear
+                        ],
+                        startPoint: .topLeading, endPoint: .bottomTrailing))
+            }
+            .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         }
     }
 }
@@ -104,31 +104,20 @@ private struct LiquidRim: View {
     let intensity: Double
 
     var body: some View {
-        if #available(iOS 17.0, *) {
-            Rectangle()
-                .fill(.clear)
-                .colorEffect(
-                    ShaderLibrary.liquidGlassRim(
-                        .float2(CGSize(width: 400, height: 400)),
-                        .float(radius),
-                        .float(lineWidth),
-                        .float(intensity)
-                    )
-                )
-        } else {
-            RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .strokeBorder(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(intensity),
-                            Color.white.opacity(intensity * 0.2),
-                            Color.black.opacity(0.10)
-                        ],
-                        startPoint: .top, endPoint: .bottom
-                    ),
-                    lineWidth: lineWidth
-                )
-        }
+        // 用渐变描边即可：colorEffect 的输入是整块矩形，
+        // 会在卡片上留下斜向亮带，故不用 shader 画边。
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
+            .strokeBorder(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(intensity),
+                        Color.white.opacity(intensity * 0.18),
+                        Color.black.opacity(0.08)
+                    ],
+                    startPoint: .top, endPoint: .bottom
+                ),
+                lineWidth: lineWidth
+            )
     }
 }
 
