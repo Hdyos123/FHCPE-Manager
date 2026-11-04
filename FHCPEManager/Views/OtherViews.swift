@@ -27,7 +27,7 @@ struct ControlView: View {
                                   "airplane", .orange)
                         switchRow("数据漫游", "绑定允许在国内网络以外使用数据",
                                   CpeNode.netSet + "RoamingEnable",
-                                  "globetrotter", .blue)
+                                  "globe.americas.fill", .blue)
                         switchRow("VoLTE", "通话时保持 4G/5G 数据连接",
                                   CpeNode.netSet + "volte_switch",
                                   "phone.connection", .green)
@@ -40,7 +40,7 @@ struct ControlView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.top, 8)
-                .padding(.bottom, 28)
+                .padding(.bottom, 102)
             }
             .scrollContentBackground(.hidden)
             .background(GlassListBackground())
@@ -243,7 +243,7 @@ struct ParamView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.top, 8)
-                .padding(.bottom, 28)
+                .padding(.bottom, 102)
             }
             .scrollContentBackground(.hidden)
             .background(GlassListBackground())
