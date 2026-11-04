@@ -254,14 +254,7 @@ struct LoginView: View {
             .padding(.top, 4)
         }
         .padding(18)
-        .background(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(scheme == .dark ? Color.white.opacity(0.06) : Color.white.opacity(0.75))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .strokeBorder(Color.primary.opacity(scheme == .dark ? 0.12 : 0.06), lineWidth: 1)
-        )
+        .liquidGlass(radius: 24, strong: true)
     }
 
     private var pwdPrompt: Text {
