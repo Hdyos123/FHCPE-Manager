@@ -37,6 +37,7 @@ struct LockBandView: View {
                     if mode == 3 { cellCard }
                     carrierCard
                     applyBar
+                    diagBox
                     hints
                 }
                 .padding(.horizontal, 14)
@@ -294,6 +295,21 @@ struct LockBandView: View {
         .disabled(busy)
     }
 
+    private var diagBox: some View {
+        Group {
+            if !store.lockDiag.isEmpty {
+                Text(store.lockDiag)
+                    .font(.system(size: 9.5, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 10)
+                        .fill(Color.primary.opacity(0.05)))
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
     private var hints: some View {
         VStack(alignment: .leading, spacing: 5) {
             Label("锁定后设备会重新搜网，期间断线十几秒", systemImage: "info.circle")
@@ -315,6 +331,19 @@ struct LockBandView: View {
     }
 
     private func loadCurrent() {
+        // 读取当前锁定状态
+        Task {
+            if let v = try? await CpeNativeAPI.shared.values([
+                "en": CpeNode.netSet + "LockBandEnable",
+                "nr": CpeNode.netSet + "NRLockBAND",
+                "lte": CpeNode.netSet + "LTELockBAND"
+            ]), !v.isEmpty {
+                lockEnabled = (v["en"] ?? "0") == "1"
+                mode = lockEnabled ? 1 : 0
+                selectedNR = Set((v["nr"] ?? "").split(separator: ",").compactMap { Int($0) })
+                selectedLTE = Set((v["lte"] ?? "").split(separator: ",").compactMap { Int($0) })
+            }
+        }
         lockEnabled = store.status["lockbandEn"] == "1"
         carrierEnabled = store.status["carrierLockEn"] == "1"
         carrierSerial = store.status["carrierLockNum"]
