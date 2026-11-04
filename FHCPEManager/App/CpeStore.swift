@@ -682,6 +682,8 @@ final class CpeStore: ObservableObject {
 
     /// 短信原始返回（为空时给用户看，便于定位）
     @Published var smsDebug: String = ""
+    /// 锁频写入诊断（显示在锁频页底部）
+    @Published var lockDiag: String = ""
 
     /// 读取收件箱
     /// 烽火的短信走专用接口 get_sms_data，且依赖页面里的 x_* 节点常量，
@@ -699,8 +701,9 @@ final class CpeStore: ObservableObject {
 
         // ① 原生：直接用 multipostRaw
         if useNative {
-            if let resp = try? await CpeNativeAPI.shared.multipostRaw(
-                "get_value_by_xmlnode|get_sms_data", query) {
+            do {
+                let resp = try await CpeNativeAPI.shared.multipostRaw(
+                    "get_value_by_xmlnode|get_sms_data", query)
                 if let d = try? JSONSerialization.data(withJSONObject: resp),
                    let t = String(data: d, encoding: .utf8) {
                     tried.append("native:" + String(t.prefix(300)))
@@ -710,8 +713,8 @@ final class CpeStore: ObservableObject {
                    let list = Self.parseSmsResponse(t), !list.isEmpty {
                     return list
                 }
-            } else {
-                tried.append("native 无响应")
+            } catch {
+                tried.append("native 异常: " + String(describing: error).prefix(120))
             }
         }
 
@@ -946,16 +949,35 @@ final class CpeStore: ObservableObject {
     /// 频段锁定
     func applyBandLock(enable: Bool, nr: [Int], lte: [Int]) async -> Bool {
         let ns = CpeNode.netSet
-        var ok = await set1(ns + "LockBandEnable", enable ? "1" : "0")
-        if !nr.isEmpty {
-            ok = await set1(ns + "NRLockBAND", nr.map(String.init).joined(separator: ",")) && ok
+        var steps: [String] = []
+
+        let r1 = await set1(ns + "LockBandEnable", enable ? "1" : "0")
+        steps.append("启用=\(r1)")
+
+        if enable {
+            if !nr.isEmpty {
+                let v = nr.map(String.init).joined(separator: ",")
+                let r = await set1(ns + "NRLockBAND", v)
+                steps.append("NR[\(v)]=\(r)")
+            }
+            if !lte.isEmpty {
+                let v = lte.map(String.init).joined(separator: ",")
+                let r = await set1(ns + "LTELockBAND", v)
+                steps.append("LTE[\(v)]=\(r)")
+            }
         }
-        if !lte.isEmpty {
-            ok = await set1(ns + "LTELockBAND", lte.map(String.init).joined(separator: ",")) && ok
-        }
-        try? await Task.sleep(nanoseconds: 2_000_000_000)
+
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
         await fetchStatus()
-        return ok
+
+        // 回读验证
+        let chk = (try? await CpeNativeAPI.shared.values([
+            "en": ns + "LockBandEnable",
+            "nr": ns + "NRLockBAND"
+        ])) ?? [:]
+        lockDiag = steps.joined(separator: " · ") + " | 回读 en=\(chk["en"] ?? "?") nr=\(chk["nr"] ?? "?")"
+
+        return r1
     }
 
     /// 运营商锁定
