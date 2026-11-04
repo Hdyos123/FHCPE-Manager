@@ -121,7 +121,7 @@ struct HomeView: View {
         }
         .padding(.horizontal, 14)
         .padding(.top, 6)
-        .padding(.bottom, 24)
+        .padding(.bottom, 102)
     }
 
     // MARK: - 顶部主卡
@@ -196,10 +196,8 @@ struct HomeView: View {
                 }
                 .frame(width: 88, alignment: .leading)
 
-                // 中：信号环（占据剩余空间并居中，左右对称）
-                signalGauge
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 148)
+                // 中：信号强度数值（大圆圈已并入下方信号数据卡）
+                Spacer(minLength: 0)
 
                 // 右：2×2 功能键 + 设备卡（网格均分，四个按钮完全等大）
                 VStack(spacing: 8) {
@@ -249,6 +247,25 @@ struct HomeView: View {
         }
         .padding(16)
         .glassCard(radius: 24, strong: true)
+    }
+
+    /// 只在主载波（PCC）上显示信号强度
+    private func idx0IsPrimary(_ c: CarrierComponent) -> Bool { c.isPrimary }
+
+    private var signalValue: Double { Double(s.int("rsrp")) }
+
+    private var signalText: String {
+        let v = signalValue
+        return v == 0 ? "--" : String(Int(v))
+    }
+
+    private var signalColor: Color {
+        let v = signalValue
+        if v == 0 { return .secondary }
+        if v >= -90 { return .green }
+        if v >= -100 { return .blue }
+        if v >= -110 { return .orange }
+        return .red
     }
 
     private var memPercent: Int {
@@ -505,6 +522,27 @@ struct HomeView: View {
         }
     }
 
+    private func capsuleCell(_ title: String, _ value: String,
+                             _ note: String, _ tint: Color) -> some View {
+        VStack(spacing: 2) {
+            Text(title)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+            Text(value.isEmpty ? "--" : value)
+                .font(.system(size: 17, weight: .bold, design: .rounded))
+                .foregroundStyle(tint)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            if !note.isEmpty {
+                Text(note)
+                    .font(.system(size: 8.5))
+                    .foregroundStyle(.secondary.opacity(0.8))
+                    .lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
     private var contractCards: some View {
         Group {
             if store.isOppo || store.isHuawei {
@@ -516,12 +554,17 @@ struct HomeView: View {
                     contractItem("网络", s["netmode"] == "3" ? "5G" : "4G", "orange")
                 }
             } else {
-                HStack(spacing: 9) {
-                    contractItem("QCI", s["qci"], "teal", subtitle: qciSubtitle)
-                    contractItem("签约下行", pick(customDown, s["dlmax"]), "blue", unit: true)
-                    contractItem("签约上行", pick(customUp, s["ulmax"]),
-                                 "orange", unit: true, editable: true)
+                // QCI / 签约下行 / 签约上行 合并为一个胶囊
+                HStack(spacing: 0) {
+                    capsuleCell("QCI", s["qci"].isEmpty ? "--" : s["qci"], qciSubtitle, .teal)
+                    Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 1, height: 26)
+                    capsuleCell("签约下行", pick(customDown, s["dlmax"]), "Mbps", .blue)
+                    Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 1, height: 26)
+                    capsuleCell("签约上行", pick(customUp, s["ulmax"]), "Mbps", .orange)
                 }
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity)
+                .glassCard(radius: 20)
             }
         }
     }
@@ -648,6 +691,22 @@ struct HomeView: View {
                 }
 
                 Spacer()
+
+                // 信号强度（原首页大圆圈，现并入此处）
+                if idx0IsPrimary(c) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                            .font(.system(size: 11))
+                            .foregroundStyle(signalColor)
+                        Text(signalText)
+                            .font(.system(size: 17, weight: .bold, design: .rounded))
+                            .foregroundStyle(signalColor)
+                        Text("dBm")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.trailing, 6)
+                }
 
                 if !c.arfcn.isEmpty {
                     VStack(alignment: .trailing, spacing: 0) {
