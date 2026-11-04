@@ -23,6 +23,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: List available Xcode
+        run: ls -d /Applications/Xcode*.app 2>/dev/null || echo "none"
+
       - name: Show Xcode
         run: xcodebuild -version
 
