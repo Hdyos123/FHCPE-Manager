@@ -57,9 +57,7 @@ private struct GlassBackdrop: View {
                         .float(radius),
                         .float(26),
                         .float(strong ? 16 : 11),
-                        .float3(.float(Float(tintRGB.0)),
-                                .float(Float(tintRGB.1)),
-                                .float(Float(tintRGB.2))),
+                        .float3(Float(tintRGB.0), Float(tintRGB.1), Float(tintRGB.2)),
                         .float(scheme == .dark ? 0.16 : 0.06),
                         .float(.pi * 1.25)
                     ),
