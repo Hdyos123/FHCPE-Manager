@@ -98,8 +98,10 @@ final class CpeStore: ObservableObject {
             }
         }
 
-        // 三次都失败才提示，且用温和措辞
-        toast("暂时连不上设备，稍后自动重试", kind: .info)
+        // 三次都失败才提示；已登录状态下不打扰用户（后台静默重试即可）
+        if !isLoggedIn {
+            toast("暂时连不上设备，稍后自动重试", kind: .info)
+        }
     }
 
     private var useNative = false
@@ -467,8 +469,12 @@ final class CpeStore: ObservableObject {
             if v.isEmpty { failed = true }
         }
 
-        // 连续失败计数：超过 2 次就重新登录，恢复被设备踢掉的会话
-        if failed || v.isEmpty {
+        // 判定会话是否真的断了：只要拿到任意一个核心字段就算活着。
+        // 有些固件缺个别节点，整批返回里会有空项，不能因此判失败。
+        let heard = !v["model"].isEmpty || !v["rsrp"].isEmpty
+            || !v["cpu"].isEmpty || !v["monthRx"].isEmpty
+
+        if failed && !heard {
             failStreak += 1
             if failStreak >= 2 {
                 failStreak = 0
