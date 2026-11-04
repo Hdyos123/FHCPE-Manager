@@ -218,11 +218,14 @@ final class CpeNativeAPI {
 
     private func refreshSession() async throws {
         let t = try await request("/api/tmp/FHNCAPIS?ajaxmethod=get_refresh_sessionid&_=\(rnd())")
-        if let d = t.data(using: .utf8),
-           let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-           let s = o["sessionid"] as? String {
-            sid = s
+        guard let d = t.data(using: .utf8),
+              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+              let s = o["sessionid"] as? String, !s.isEmpty else {
+            // 拿不到新会话时退回旧会话，而不是带着空 sid 去请求
+            if sid.isEmpty { throw NError.noSession }
+            return
         }
+        sid = s
     }
 
     func values(_ mapping: [String: String]) async throws -> [String: String] {
