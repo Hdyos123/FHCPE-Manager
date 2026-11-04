@@ -41,7 +41,7 @@ struct LockBandView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.top, 8)
-                .padding(.bottom, 30)
+                .padding(.bottom, 102)
                 .frame(maxWidth: .infinity)
             }
             .navigationTitle("锁频")
@@ -404,7 +404,7 @@ struct SmsView: View {
                     }
                     .padding(.horizontal, 14)
                     .padding(.top, 8)
-                    .padding(.bottom, 30)
+                    .padding(.bottom, 102)
                     .frame(maxWidth: .infinity)
                 }
                 .refreshable { await load() }
