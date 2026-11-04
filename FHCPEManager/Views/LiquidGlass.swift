@@ -23,16 +23,22 @@ struct LiquidGlassRefractionModifier: ViewModifier {
     }
 
     func body(content: Content) -> some View {
+        // 关键：只裁背景，不裁 content
+        // 否则 overlay 在卡片边角外的元素（刷新胶囊、编辑笔）会被切掉
         content
             .background {
-                GlassBackdrop(radius: radius, strong: strong, tintRGB: tintRGB)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .overlay {
-                LiquidRim(radius: radius,
-                          lineWidth: 1.0,
-                          intensity: scheme == .dark ? 0.55 : 0.95)
-                    .allowsHitTesting(false)
+                ZStack {
+                    GlassBackdrop(radius: radius, strong: strong, tintRGB: tintRGB)
+                        .clipShape(RoundedRectangle(cornerRadius: radius,
+                                                    style: .continuous))
+
+                    LiquidRim(radius: radius,
+                              lineWidth: 1.0,
+                              intensity: scheme == .dark ? 0.55 : 0.95)
+                        .clipShape(RoundedRectangle(cornerRadius: radius,
+                                                    style: .continuous))
+                        .allowsHitTesting(false)
+                }
             }
             .shadow(color: Color.black.opacity(scheme == .dark ? 0.45 : 0.08),
                     radius: strong ? 22 : 14, x: 0, y: strong ? 9 : 5)
