@@ -166,32 +166,33 @@ private func handleNotifyAction(_ a: NotifyAction?, store: CpeStore) async {
 struct MainTabView: View {
     @StateObject private var router = TabRouter()
 
+    private let items: [LiquidTabBar.Item] = [
+        .init(id: 0, title: "首页", icon: "house.fill"),
+        .init(id: 1, title: "短信", icon: "message.fill"),
+        .init(id: 2, title: "控制", icon: "slider.horizontal.3"),
+        .init(id: 3, title: "锁频", icon: "lock.fill"),
+        .init(id: 4, title: "参数", icon: "doc.text"),
+        .init(id: 5, title: "设置", icon: "gearshape.fill")
+    ]
+
     var body: some View {
-        TabView(selection: $router.selection) {
-            HomeView()
-                .tabItem { Label("首页", systemImage: "house.fill") }
-                .tag(0)
+        ZStack(alignment: .bottom) {
+            Group {
+                switch router.selection {
+                case 0: HomeView()
+                case 1: SmsTab()
+                case 2: ControlTab()
+                case 3: LockTab()
+                case 4: ParamTab()
+                default: SettingsView()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            SmsTab()
-                .tabItem { Label("短信", systemImage: "message.fill") }
-                .tag(1)
-
-            ControlTab()
-                .tabItem { Label("控制", systemImage: "slider.horizontal.3") }
-                .tag(2)
-
-            LockTab()
-                .tabItem { Label("锁频", systemImage: "lock.fill") }
-                .tag(3)
-
-            ParamTab()
-                .tabItem { Label("参数", systemImage: "doc.text") }
-                .tag(4)
-
-            SettingsView()
-                .tabItem { Label("设置", systemImage: "gearshape.fill") }
-                .tag(5)
+            LiquidTabBar(items: items, selection: $router.selection)
+                .zIndex(20)
         }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .environmentObject(router)
     }
 }
