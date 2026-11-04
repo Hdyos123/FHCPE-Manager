@@ -69,7 +69,9 @@ static float roundedBoxSDF(float2 p, float2 halfSize, float r) {
     // 浸染色
     col = mix(col, half3(tintColor), half(tintOpacity * (0.35 + 0.65 * rim)));
 
-    return col;
+    // 保持原图 alpha
+    half a = layer.sample(position).a;
+    return half4(col, a);
 }
 
 // MARK: - 玻璃边缘描边（单独一层，方便控制亮度）
