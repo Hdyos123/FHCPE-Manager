@@ -6,7 +6,7 @@ struct GlassListBackground: View {
 
     var body: some View {
         ZStack {
-            // 浅色：淡蓝白渐变  深色：深蓝黑渐变
+            // 底色渐变
             LinearGradient(
                 colors: scheme == .dark
                     ? [Color(red: 0.07, green: 0.09, blue: 0.15),
@@ -18,8 +18,36 @@ struct GlassListBackground: View {
                 startPoint: .top,
                 endPoint: .bottom
             )
-            .ignoresSafeArea()
+
+            // 光斑：让液态玻璃有东西可折射
+            GeometryReader { geo in
+                let w = geo.size.width
+                let h = geo.size.height
+                ZStack {
+                    Circle()
+                        .fill(Color(red: 0.35, green: 0.55, blue: 0.98))
+                        .frame(width: w * 0.85)
+                        .blur(radius: 90)
+                        .opacity(scheme == .dark ? 0.32 : 0.30)
+                        .offset(x: -w * 0.30, y: -h * 0.32)
+
+                    Circle()
+                        .fill(Color(red: 0.62, green: 0.42, blue: 0.96))
+                        .frame(width: w * 0.75)
+                        .blur(radius: 100)
+                        .opacity(scheme == .dark ? 0.28 : 0.24)
+                        .offset(x: w * 0.34, y: -h * 0.10)
+
+                    Circle()
+                        .fill(Color(red: 0.20, green: 0.80, blue: 0.72))
+                        .frame(width: w * 0.80)
+                        .blur(radius: 110)
+                        .opacity(scheme == .dark ? 0.24 : 0.20)
+                        .offset(x: -w * 0.20, y: h * 0.34)
+                }
+            }
         }
+        .ignoresSafeArea()
     }
 }
 
@@ -31,12 +59,27 @@ struct GlassRowModifier: ViewModifier {
         content
             .listRowBackground(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(scheme == .dark
-                          ? Color.white.opacity(0.09)
-                          : Color.white.opacity(0.62))
+                    .fill(.ultraThinMaterial)
                     .overlay(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(Color.white.opacity(scheme == .dark ? 0.16 : 0.85), lineWidth: 0.8)
+                            .fill(scheme == .dark
+                                  ? Color.white.opacity(0.045)
+                                  : Color.white.opacity(0.42))
+                    )
+                    .overlay(
+                        // 顶部高光描边
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(scheme == .dark ? 0.30 : 0.92),
+                                        Color.white.opacity(scheme == .dark ? 0.05 : 0.28),
+                                        Color.black.opacity(scheme == .dark ? 0.18 : 0.04)
+                                    ],
+                                    startPoint: .top, endPoint: .bottom
+                                ),
+                                lineWidth: 0.8
+                            )
                     )
                     .padding(.vertical, 2)
                     .padding(.horizontal, 4)
@@ -51,6 +94,10 @@ extension View {
         self
             .scrollContentBackground(.hidden)
             .background(GlassListBackground())
+            .safeAreaInset(edge: .bottom) {
+                Color.clear.frame(height: 78)
+            }
+
     }
 
     /// 应用到 List Row 上：玻璃卡片
@@ -93,7 +140,7 @@ struct GlassCard: ViewModifier {
 
 extension View {
     func glassCard(radius: CGFloat = 24, strong: Bool = false) -> some View {
-        modifier(GlassCard(radius: radius, strong: strong))
+        liquidGlass(radius: radius, strong: strong)
     }
 }
 
