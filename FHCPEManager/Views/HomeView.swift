@@ -760,6 +760,21 @@ struct HomeView: View {
                     .font(.system(size: 19, weight: .bold))
                 Text(s["bw"]).font(.system(size: 12)).foregroundStyle(.secondary)
                 Spacer()
+
+                // 信号强度（原首页大圆圈，现并入此处）
+                HStack(spacing: 4) {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                        .font(.system(size: 11))
+                        .foregroundStyle(signalColor)
+                    Text(signalText)
+                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .foregroundStyle(signalColor)
+                    Text("dBm")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.trailing, 6)
+
                 if !s["arfcn"].isEmpty {
                     VStack(alignment: .trailing, spacing: 0) {
                         Text("NRARFCN").font(.system(size: 8.5)).foregroundStyle(.secondary)
