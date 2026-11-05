@@ -27,7 +27,9 @@ jobs:
         run: ls -d /Applications/Xcode*.app 2>/dev/null || echo "none"
 
       - name: Show Xcode
-        run: xcodebuild -version
+        run: |
+          xcodebuild -version
+          ls -d /Applications/Xcode*.app 2>/dev/null || true
 
       - name: Install XcodeGen
         run: brew install xcodegen
