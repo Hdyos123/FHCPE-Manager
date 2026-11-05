@@ -342,23 +342,18 @@ final class CpeNativeAPI {
               let ps = String(data: pd, encoding: .utf8),
               let payload = encrypt(ps) else { throw NError.crypto }
         var r = try await request("/api/tmp/FHAPIS?_\(rnd())", body: payload)
-        // 会话失效：设备返回 ERROR（而非加密串）→ 刷会话重试一次
+
+        // 会话失效：设备返回明文 ERROR → 刷会话、重加密、重试一次
         let tt = r.trimmingCharacters(in: .whitespacesAndNewlines)
         if tt.hasPrefix("ERROR") {
             sid = ""
             try await doRefreshSession()
-            var req2 = URLRequest(url: URL(string: "/api/tmp/FHAPIS?_\(rnd())", relativeTo: URL(string: "http://\(host)"))!)
-            // 重新加密发送
             guard let pd2 = try? JSONSerialization.data(withJSONObject: inner),
                   let ps2 = String(data: pd2, encoding: .utf8),
                   let payload2 = encrypt(ps2) else { throw NError.crypto }
-            var rr = URLRequest(url: URL(string: "http://\(host)/api/tmp/FHAPIS?_\(rnd())")!)
-            rr.httpMethod = "POST"
-            rr.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
-            rr.httpBody = payload2.data(using: .utf8)
-            let (d2, _) = try await session.data(for: rr)
-            r = String(data: d2, encoding: .utf8) ?? ""
+            r = try await request("/api/tmp/FHAPIS?_\(rnd())", body: payload2)
         }
+
         return decode(r)
     }
 
