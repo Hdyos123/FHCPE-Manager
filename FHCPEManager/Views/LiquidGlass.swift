@@ -60,26 +60,45 @@ private struct GlassBackdrop: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        if #available(iOS 26.0, *) {
-            // iOS 26+：材质已足够（系统 TabView/Sheet 会自动液态玻璃化）
-            // 注意：.glassEffect() 需要 Xcode 26 SDK 编译，当前工具链用不了
-            RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .fill(.ultraThinMaterial)
-        } else {
-            // 低版本回退：毛玻璃 + 高光描边
-            RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .overlay(
-                    LinearGradient(
+        GeometryReader { geo in
+            let size = geo.size
+            ZStack {
+                if #available(iOS 17.0, *) {
+                    // 真折射：shader 按边缘法线弯折采样（iOS 17 API，Xcode 15 可编译）
+                    Rectangle()
+                        .fill(.ultraThinMaterial)
+                        .layerEffect(
+                            ShaderLibrary.liquidGlassRefraction(
+                                .float2(Float(size.width), Float(size.height)),
+                                .float(radius),
+                                .float(26),
+                                .float(strong ? 16 : 11),
+                                .float3(Float(tintRGB.0), Float(tintRGB.1), Float(tintRGB.2)),
+                                .float(scheme == .dark ? 0.16 : 0.06),
+                                .float(.pi * 1.25)
+                            ),
+                            maxSampleOffset: CGSize(width: 24, height: 24)
+                        )
+                } else {
+                    Rectangle().fill(.ultraThinMaterial)
+                }
+
+                // 实体感
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .fill(scheme == .dark
+                          ? Color.white.opacity(strong ? 0.055 : 0.032)
+                          : Color.white.opacity(strong ? 0.50 : 0.38))
+
+                // 对角高光
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .fill(LinearGradient(
                         colors: [
-                            Color.white.opacity(scheme == .dark ? 0.10 : 0.55),
-                            Color.white.opacity(0.0),
-                            Color.black.opacity(0.05)
+                            Color.white.opacity(scheme == .dark ? 0.09 : 0.50),
+                            .clear
                         ],
-                        startPoint: .topLeading, endPoint: .bottomTrailing
-                    )
-                    .allowsHitTesting(false)
-                )
+                        startPoint: .topLeading, endPoint: .bottomTrailing))
+            }
+            .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         }
     }
 }
