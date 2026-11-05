@@ -25,23 +25,30 @@ struct LiquidGlassRefractionModifier: ViewModifier {
     func body(content: Content) -> some View {
         // 关键：只裁背景，不裁 content
         // 否则 overlay 在卡片边角外的元素（刷新胶囊、编辑笔）会被切掉
-        content
-            .background {
-                ZStack {
+        if #available(iOS 26.0, *) {
+            content
+                .background {
                     GlassBackdrop(radius: radius, strong: strong, tintRGB: tintRGB)
-                        .clipShape(RoundedRectangle(cornerRadius: radius,
-                                                    style: .continuous))
-
-                    LiquidRim(radius: radius,
-                              lineWidth: 1.0,
-                              intensity: scheme == .dark ? 0.55 : 0.95)
-                        .clipShape(RoundedRectangle(cornerRadius: radius,
-                                                    style: .continuous))
-                        .allowsHitTesting(false)
                 }
-            }
-            .shadow(color: Color.black.opacity(scheme == .dark ? 0.45 : 0.08),
-                    radius: strong ? 22 : 14, x: 0, y: strong ? 9 : 5)
+        } else {
+            content
+                .background {
+                    ZStack {
+                        GlassBackdrop(radius: radius, strong: strong, tintRGB: tintRGB)
+                            .clipShape(RoundedRectangle(cornerRadius: radius,
+                                                        style: .continuous))
+
+                        LiquidRim(radius: radius,
+                                  lineWidth: 1.0,
+                                  intensity: scheme == .dark ? 0.55 : 0.95)
+                            .clipShape(RoundedRectangle(cornerRadius: radius,
+                                                        style: .continuous))
+                            .allowsHitTesting(false)
+                    }
+                }
+                .shadow(color: Color.black.opacity(0.10),
+                        radius: 14, x: 0, y: 5)
+        }
     }
 }
 
@@ -50,49 +57,30 @@ private struct GlassBackdrop: View {
     let radius: CGFloat
     let strong: Bool
     let tintRGB: (Double, Double, Double)
-
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        GeometryReader { geo in
-            let size = geo.size
-            ZStack {
-                if #available(iOS 17.0, *) {
-                    Rectangle()
-                        .fill(.ultraThinMaterial)
-                        .layerEffect(
-                            ShaderLibrary.liquidGlassRefraction(
-                                .float2(Float(size.width), Float(size.height)),
-                                .float(radius),
-                                .float(26),
-                                .float(strong ? 16 : 11),
-                                .float3(Float(tintRGB.0), Float(tintRGB.1), Float(tintRGB.2)),
-                                .float(scheme == .dark ? 0.16 : 0.06),
-                                .float(.pi * 1.25)
-                            ),
-                            maxSampleOffset: CGSize(width: 24, height: 24)
-                        )
-                } else {
-                    Rectangle()
-                        .fill(.ultraThinMaterial)
-                }
-
-                // 提亮/压暗，让玻璃有实体感
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .fill(scheme == .dark
-                          ? Color.white.opacity(strong ? 0.055 : 0.032)
-                          : Color.white.opacity(strong ? 0.50 : 0.38))
-
-                // 对角高光
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .fill(LinearGradient(
+        if #available(iOS 26.0, *) {
+            // 原生液态玻璃：真折射 + 系统渲染，无斜切问题
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(.clear)
+                .glassEffect(.regular.interactive(), in:
+                    .rect(cornerRadius: radius, style: .continuous))
+        } else {
+            // 低版本回退：毛玻璃 + 高光描边
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    LinearGradient(
                         colors: [
-                            Color.white.opacity(scheme == .dark ? 0.09 : 0.50),
-                            .clear
+                            Color.white.opacity(scheme == .dark ? 0.10 : 0.55),
+                            Color.white.opacity(0.0),
+                            Color.black.opacity(0.05)
                         ],
-                        startPoint: .topLeading, endPoint: .bottomTrailing))
-            }
-            .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    )
+                    .allowsHitTesting(false)
+                )
         }
     }
 }
