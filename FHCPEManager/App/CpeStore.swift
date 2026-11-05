@@ -471,8 +471,8 @@ final class CpeStore: ObservableObject {
 
         // 判定会话是否真的断了：只要拿到任意一个核心字段就算活着。
         // 有些固件缺个别节点，整批返回里会有空项，不能因此判失败。
-        let heard = !v["model"].isEmpty || !v["rsrp"].isEmpty
-            || !v["cpu"].isEmpty || !v["monthRx"].isEmpty
+        let heard = !(v["model"] ?? "").isEmpty || !(v["rsrp"] ?? "").isEmpty
+            || !(v["cpu"] ?? "").isEmpty || !(v["monthRx"] ?? "").isEmpty
 
         if failed && !heard {
             failStreak += 1
