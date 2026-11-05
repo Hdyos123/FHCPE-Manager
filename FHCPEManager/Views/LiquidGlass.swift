@@ -67,8 +67,7 @@ private struct GlassBackdrop: View {
                     // iOS 26+：系统原生液态玻璃（真折射 + 边缘形变）
                     // 编译宏保护：Xcode 26 SDK 才有 glassEffect 符号
                     #if compiler(>=6.2)
-                    RoundedRectangle(cornerRadius: radius, style: .continuous)
-                        .fill(.clear)
+                    Color.clear
                         .glassEffect(.regular.interactive(),
                                      in: .rect(cornerRadius: radius, style: .continuous))
                     #else
@@ -122,7 +121,6 @@ private struct GlassBackdrop: View {
                         ],
                         startPoint: .topLeading, endPoint: .bottomTrailing))
             }
-            .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         }
     }
 }
