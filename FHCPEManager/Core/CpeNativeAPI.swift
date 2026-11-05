@@ -216,12 +216,18 @@ final class CpeNativeAPI {
         return o
     }
 
-    private func refreshSession() async throws {
+    /// 仅在会话失效时刷新（由 request 内部检测触发）
+    /// 之前每次请求都刷，和每秒轮询并发时会互相取消（-999）
+    private func refreshSessionIfNeeded() async throws {
+        guard sid.isEmpty else { return }
+        try await doRefreshSession()
+    }
+
+    private func doRefreshSession() async throws {
         let t = try await request("/api/tmp/FHNCAPIS?ajaxmethod=get_refresh_sessionid&_=\(rnd())")
         guard let d = t.data(using: .utf8),
               let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
               let s = o["sessionid"] as? String, !s.isEmpty else {
-            // 拿不到新会话时退回旧会话，而不是带着空 sid 去请求
             if sid.isEmpty { throw NError.noSession }
             return
         }
@@ -229,7 +235,7 @@ final class CpeNativeAPI {
     }
 
     func values(_ mapping: [String: String]) async throws -> [String: String] {
-        try await refreshSession()
+        try await refreshSessionIfNeeded()
         let inner: [String: Any] = [
             "ajaxmethod": "get_value_by_xmlnode",
             "multipost": 1,
@@ -251,7 +257,7 @@ final class CpeNativeAPI {
     }
 
     func multipost(method: String, data: [String: Any]) async throws -> [[String: Any]] {
-        try await refreshSession()
+        try await refreshSessionIfNeeded()
         let inner: [String: Any] = [
             "ajaxmethod": method,
             "multipost": 1,
@@ -272,7 +278,7 @@ final class CpeNativeAPI {
 
     /// 通用 POST（get_xml_childnode_value 等，返回结构为 {"data":[...]}）
     func post(_ method: String, _ dataObj: [String: Any]) async throws -> [String: Any] {
-        try await refreshSession()
+        try await refreshSessionIfNeeded()
         let inner: [String: Any] = [
             "ajaxmethod": method,
             "dataObj": dataObj,
@@ -281,12 +287,24 @@ final class CpeNativeAPI {
         guard let pd = try? JSONSerialization.data(withJSONObject: inner),
               let ps = String(data: pd, encoding: .utf8),
               let payload = encrypt(ps) else { throw NError.crypto }
-        let r = try await request("/api/tmp/FHAPIS?_\(rnd())", body: payload)
+        var r = try await request("/api/tmp/FHAPIS?_\(rnd())", body: payload)
+
+        // 会话失效：设备返回明文 ERROR → 刷会话、重加密、重试一次
+        let tt = r.trimmingCharacters(in: .whitespacesAndNewlines)
+        if tt.hasPrefix("ERROR") {
+            sid = ""
+            try await doRefreshSession()
+            guard let pd2 = try? JSONSerialization.data(withJSONObject: inner),
+                  let ps2 = String(data: pd2, encoding: .utf8),
+                  let payload2 = encrypt(ps2) else { throw NError.crypto }
+            r = try await request("/api/tmp/FHAPIS?_\(rnd())", body: payload2)
+        }
+
         return decode(r)
     }
 
     func setSingle(url: String, value: String) async throws {
-        try await refreshSession()
+        try await refreshSessionIfNeeded()
         let inner: [String: Any] = [
             "ajaxmethod": "set_single_by_xmlnode",
             "dataObj": ["url": url, "value": value],
@@ -312,7 +330,8 @@ final class CpeNativeAPI {
 
     /// multipost 的原始返回（保留 data_1 / data_2 等全部字段）
     func multipostRaw(_ method: String, _ data: [String: Any]) async throws -> [String: Any] {
-        try await refreshSession()
+        // 不刷新会话：首页轮询每秒在跑，这里再刷会与轮询请求并发，
+        // URLSession 会把其中一个取消（NSURLErrorCancelled / -999）
         let inner: [String: Any] = [
             "ajaxmethod": method,
             "multipost": 1,
@@ -322,12 +341,29 @@ final class CpeNativeAPI {
         guard let pd = try? JSONSerialization.data(withJSONObject: inner),
               let ps = String(data: pd, encoding: .utf8),
               let payload = encrypt(ps) else { throw NError.crypto }
-        let r = try await request("/api/tmp/FHAPIS?_\(rnd())", body: payload)
+        var r = try await request("/api/tmp/FHAPIS?_\(rnd())", body: payload)
+        // 会话失效：设备返回 ERROR（而非加密串）→ 刷会话重试一次
+        let tt = r.trimmingCharacters(in: .whitespacesAndNewlines)
+        if tt.hasPrefix("ERROR") {
+            sid = ""
+            try await doRefreshSession()
+            var req2 = URLRequest(url: URL(string: "/api/tmp/FHAPIS?_\(rnd())", relativeTo: URL(string: "http://\(host)"))!)
+            // 重新加密发送
+            guard let pd2 = try? JSONSerialization.data(withJSONObject: inner),
+                  let ps2 = String(data: pd2, encoding: .utf8),
+                  let payload2 = encrypt(ps2) else { throw NError.crypto }
+            var rr = URLRequest(url: URL(string: "http://\(host)/api/tmp/FHAPIS?_\(rnd())")!)
+            rr.httpMethod = "POST"
+            rr.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+            rr.httpBody = payload2.data(using: .utf8)
+            let (d2, _) = try await session.data(for: rr)
+            r = String(data: d2, encoding: .utf8) ?? ""
+        }
         return decode(r)
     }
 
     func runCommand(_ key: String) async throws {
-        try await refreshSession()
+        try await refreshSessionIfNeeded()
         let inner: [String: Any] = [
             "ajaxmethod": "do_cmd_web",
             "dataObj": ["key": key],
