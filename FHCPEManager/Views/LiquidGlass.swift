@@ -61,11 +61,10 @@ private struct GlassBackdrop: View {
 
     var body: some View {
         if #available(iOS 26.0, *) {
-            // 原生液态玻璃：真折射 + 系统渲染，无斜切问题
+            // iOS 26+：材质已足够（系统 TabView/Sheet 会自动液态玻璃化）
+            // 注意：.glassEffect() 需要 Xcode 26 SDK 编译，当前工具链用不了
             RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .fill(.clear)
-                .glassEffect(.regular.interactive(), in:
-                    .rect(cornerRadius: radius, style: .continuous))
+                .fill(.ultraThinMaterial)
         } else {
             // 低版本回退：毛玻璃 + 高光描边
             RoundedRectangle(cornerRadius: radius, style: .continuous)
