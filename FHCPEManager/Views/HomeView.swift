@@ -523,11 +523,25 @@ struct HomeView: View {
     }
 
     private func capsuleCell(_ title: String, _ value: String,
-                             _ note: String, _ tint: Color) -> some View {
+                             _ note: String, _ tint: Color,
+                             editable: Bool = false) -> some View {
         VStack(spacing: 2) {
-            Text(title)
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
+            HStack(spacing: 3) {
+                Text(title)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                if editable {
+                    Button {
+                        Haptic.light()
+                        showContract = true
+                    } label: {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(tint.opacity(0.85))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
             Text(value.isEmpty ? "--" : value)
                 .font(.system(size: 17, weight: .bold, design: .rounded))
                 .foregroundStyle(tint)
@@ -560,7 +574,8 @@ struct HomeView: View {
                     Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 1, height: 26)
                     capsuleCell("签约下行", pick(customDown, s["dlmax"]), "Mbps", .blue)
                     Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 1, height: 26)
-                    capsuleCell("签约上行", pick(customUp, s["ulmax"]), "Mbps", .orange)
+                    capsuleCell("签约上行", pick(customUp, s["ulmax"]), "Mbps", .orange,
+                                editable: true)
                 }
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity)
