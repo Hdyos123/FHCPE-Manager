@@ -17,9 +17,6 @@ struct RootView: View {
     @EnvironmentObject var store: CpeStore
     @Environment(\.scenePhase) private var scenePhase
 
-    @StateObject private var notify = NotifyCenter.shared
-    @State private var pendingAction: NotifyAction?
-
     var body: some View {
         ZStack {
             // 隐藏的 WKWebView 宿主：负责保持 CPE 会话
@@ -29,13 +26,11 @@ struct RootView: View {
                 .allowsHitTesting(false)
 
             // OPPO CPE 的会话宿主
-            // WebKit 规则：视图必须「在窗口内」且 alpha > 0，否则暂停 JS。
-            // 所以：放在左下角、尺寸小、不加 opacity、不用 offset 移出屏幕。
+            // 注意：不能加 .opacity()，否则叠加 WebView 自身的 alpha 会让
+            // 有效透明度趋近 0，WebKit 会暂停渲染和 JS 执行
             OppoHost()
                 .frame(width: 2, height: 2)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                 .allowsHitTesting(false)
-                .zIndex(-1)
 
             if store.isLoggedIn {
                 MainTabView()
@@ -58,12 +53,6 @@ struct RootView: View {
         }
         .animation(.easeInOut(duration: 0.25), value: store.isLoggedIn)
         .onAppear {
-            NotifyCenter.shared.bootstrap()
-            if NotifySwitch.flowLimit || NotifySwitch.offline
-                || NotifySwitch.deviceSwitch || NotifySwitch.newSms
-                || NotifySwitch.newClient {
-                NotifyCenter.shared.requestAuth()
-            }
             Task { await store.tryAutoLogin() }
             // 自愈定时器：每 5 秒检查轮询是否还活着（分屏挂边时系统可能挂起 Task）
             // 恢复屏幕常亮设置
@@ -73,42 +62,14 @@ struct RootView: View {
             Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
                 Task { @MainActor in store.ensurePollingAlive() }
             }
-
-            // 每分钟检查：流量限额提醒 + 定时重启（仅烽火生效）
-            FiberExtrasRunner.startMinuteTicker(store)
-
-            // 通知检查：流量 / 在线数 / 新短信
-            Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
-                Task { @MainActor in await NotifyRunner.tick(store) }
-            }
         }
         .onChange(of: store.isLoggedIn) { ok in
             if ok { store.startPolling() } else { store.stopPolling() }
         }
-        .onChange(of: notify.pending) { act in
-            pendingAction = act
-        }
-        .alert(pendingAction?.confirmTitle ?? "",
-               isPresented: Binding(
-                get: { pendingAction != nil },
-                set: { if !$0 { pendingAction = nil; notify.pending = nil } }
-               )) {
-            Button("取消", role: .cancel) {
-                pendingAction = nil; notify.pending = nil
-            }
-            Button(pendingAction?.confirmButton ?? "确定") {
-                let a = pendingAction
-                pendingAction = nil; notify.pending = nil
-                Task { await handleNotifyAction(a, store: store) }
-            }
-        } message: {
-            Text(pendingAction?.confirmMessage ?? "")
-        }
         .onChange(of: scenePhase) { phase in
             switch phase {
             case .active:
-                // 回到前台：取消待执行的会话释放，并重连
-                FiberExtrasRunner.cancelPendingRelease()
+                // 回到前台 / 分屏恢复：重启轮询并立即刷新
                 Task { await store.resumeFromBackground() }
             case .inactive:
                 // 分屏挂边、下拉通知中心等：保持轮询，只补一次刷新
@@ -116,8 +77,6 @@ struct RootView: View {
             case .background:
                 // 真正进入后台：停止轮询节省资源
                 store.stopPolling()
-                // 烽火：可选的后台释放会话，腾出设备在线名额
-                FiberExtrasRunner.scheduleReleaseIfNeeded(store)
             @unknown default:
                 break
             }
@@ -147,52 +106,22 @@ struct OppoHost: UIViewRepresentable {
     func updateUIView(_ uiView: UIView, context: Context) {}
 }
 
-/// 执行通知动作（已通过二次确认）
-@MainActor
-private func handleNotifyAction(_ a: NotifyAction?, store: CpeStore) async {
-    guard let a else { return }
-    switch a {
-    case .switchDevice(let host):
-        if let p = ProfileStore.loadAll().first(where: { $0.host == host }) {
-            await store.switchTo(p)
-        }
-    case .retryConnect:
-        await store.resumeFromBackground()
-    default:
-        break   // 打开类动作交给 Tab 切换处理
-    }
-}
-
 struct MainTabView: View {
-    @StateObject private var router = TabRouter()
-
-    private let items: [LiquidTabBar.Item] = [
-        .init(id: 0, title: "首页", icon: "house.fill"),
-        .init(id: 1, title: "短信", icon: "message.fill"),
-        .init(id: 2, title: "控制", icon: "slider.horizontal.3"),
-        .init(id: 3, title: "锁频", icon: "lock.fill"),
-        .init(id: 4, title: "参数", icon: "doc.text"),
-        .init(id: 5, title: "设置", icon: "gearshape.fill")
-    ]
-
     var body: some View {
-        ZStack(alignment: .bottom) {
-            Group {
-                switch router.selection {
-                case 0: HomeView()
-                case 1: SmsTab()
-                case 2: ControlTab()
-                case 3: LockTab()
-                case 4: ParamTab()
-                default: SettingsView()
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            LiquidTabBar(items: items, selection: $router.selection)
-                .zIndex(20)
+        TabView {
+            HomeView()
+                .tabItem { Label("首页", systemImage: "house.fill") }
+            SmsView()
+                .tabItem { Label("短信", systemImage: "message.fill") }
+            ControlView()
+                .tabItem { Label("控制", systemImage: "slider.horizontal.3") }
+            LockBandView()
+                .tabItem { Label("锁频", systemImage: "lock.fill") }
+            ParamView()
+                .tabItem { Label("参数", systemImage: "doc.text.fill") }
+            SettingsView()
+                .tabItem { Label("设置", systemImage: "gearshape.fill") }
         }
-        .ignoresSafeArea(.keyboard, edges: .bottom)
-        .environmentObject(router)
+        .tint(.blue)
     }
 }
