@@ -30,13 +30,6 @@ final class OppoBridge: NSObject, ObservableObject {
         let cfg = WKWebViewConfiguration()
         cfg.websiteDataStore = .default()
         cfg.defaultWebpagePreferences.allowsContentJavaScript = true
-        // 关键：允许 JS 在不活跃时也执行
-        cfg.suppressesIncrementalRendering = false
-        if #available(iOS 15.0, *) {
-            // 允许页面在后台继续运行脚本
-            cfg.preferences.isElementFullscreenEnabled = false
-        }
-        cfg.processPool = WKProcessPool()
 
         let ucc = WKUserContentController()
         ucc.add(self, name: "oppoBridge")
@@ -65,7 +58,7 @@ final class OppoBridge: NSObject, ObservableObject {
 
         let wv = WKWebView(frame: .zero, configuration: cfg)
         wv.navigationDelegate = self
-        wv.alpha = 0.02   // 不能为 0，否则 WebKit 暂停 JS
+        wv.alpha = 0.02
         wv.isUserInteractionEnabled = false
         view.addSubview(wv)
         wv.translatesAutoresizingMaskIntoConstraints = false
@@ -96,22 +89,15 @@ final class OppoBridge: NSObject, ObservableObject {
         }
 
         trace.removeAll()
+        pageLoaded = false
         loginToken += 1
         let myToken = loginToken
         log("开始加载 \(host)（会话 #\(myToken)）")
 
-        // 如果 WebView 已经加载过同一地址，直接用当前状态（最快）
-        let alreadyLoaded = (wv.url?.host == host) && pageLoaded
-        pageLoaded = false
-        if alreadyLoaded {
-            log("WebView 已加载过 \(host)，直接检查状态")
-            pageLoaded = true          // 跳过 didFinish 等待
-        } else {
-            var req = URLRequest(url: url)
-            req.timeoutInterval = 20
-            req.cachePolicy = .useProtocolCachePolicy   // 用缓存，快很多
-            wv.load(req)
-        }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 30
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        wv.load(req)
 
         // 不依赖 didFinish（OPPO 是 SPA，加载慢），主动轮询等待输入框
         // 注意：jsCall 在页面未就绪时可能返回 nil，必须记录否则看不出问题
@@ -119,38 +105,49 @@ final class OppoBridge: NSObject, ObservableObject {
 
         // 阶段一：等 didFinish（最多 20 秒）
         var waited = 0.0
-        while !pageLoaded && waited < 8 {
-            try? await Task.sleep(nanoseconds: 200_000_000)
+        while !pageLoaded && waited < 20 {
+            try? await Task.sleep(nanoseconds: 300_000_000)
             if loginToken != myToken { log("被新登录中断"); return false }
-            waited += 0.2
+            waited += 0.3
         }
-        log(pageLoaded ? "didFinish \(String(format: "%.1f", waited))s" : "didFinish 超时 8s，继续尝试")
+        log(pageLoaded ? "didFinish \(Int(waited))s" : "✗ didFinish 超时 20s")
 
-        // 关键诊断：JS 引擎是否可用
-        let jsOK = await selfTest()
-        log("JS 自检: " + jsOK)
-        if jsOK.hasPrefix("X") {
-            log("→ WebView 引擎不可用，此设备无法使用 WebView 方案")
-            return false
+        // 基础 JS 可用性测试（不走桥接，直接 evaluateJavaScript）
+        if let wv = webView {
+            let probe: String = await withCheckedContinuation { (c: CheckedContinuation<String, Never>) in
+                var done = false
+                let lock = NSLock()
+                let finish: (String) -> Void = { v in
+                    lock.lock(); defer { lock.unlock() }
+                    guard !done else { return }
+                    done = true
+                    c.resume(returning: v)
+                }
+                wv.evaluateJavaScript("document.querySelectorAll('input').length + '|' + location.hash") { res, err in
+                    if let e = err { finish("ERR:" + e.localizedDescription) }
+                    else { finish(String(describing: res ?? "nil")) }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5) { finish("TIMEOUT") }
+            }
+            log("基础探测: \(probe)")
         }
 
-        // 阶段二：轮询探测（最多 12 秒）
+        // 阶段二：轮询探测输入框（最多 15 秒）
         var lastReport = -1
-        for _ in 0..<48 {
-            try? await Task.sleep(nanoseconds: 250_000_000)
+        for _ in 0..<30 {
+            try? await Task.sleep(nanoseconds: 500_000_000)
             if loginToken != myToken { log("被新登录中断"); return false }
             let elapsed = Int(Date().timeIntervalSince(t0))
 
-            // 用 evalDirect（直接 evaluateJavaScript），不走 __oppoCall 桥
-            let st = await evalDirect("""
-            (function(){
+            let st = await jsCall("""
+            function(){
               return JSON.stringify({
                 inputs: document.querySelectorAll('input').length,
                 hash: location.hash,
                 ready: document.readyState,
                 body: (document.body ? document.body.innerHTML.length : 0)
               });
-            })()
+            }
             """)
 
             guard let str = st as? String else {
@@ -171,29 +168,19 @@ final class OppoBridge: NSObject, ObservableObject {
             }
 
             let inputs = o["inputs"] as? Int ?? 0
-            let hash = o["hash"] as? String ?? ""
-            let bodyLen = o["body"] as? Int ?? 0
-            if elapsed / 3 != lastReport {
-                lastReport = elapsed / 3
-                log("\(elapsed)s: inputs=\(inputs) hash=\(hash) body=\(bodyLen)")
+            if elapsed / 5 != lastReport {
+                lastReport = elapsed / 5
+                log("\(elapsed)s: inputs=\(inputs) hash=\(o["hash"] ?? "?") body=\(o["body"] ?? 0)")
             }
 
-            // ① 有登录表单 → 执行登录
             if inputs >= 2 {
-                log("检测到登录框 (\(elapsed)s)")
+                log("页面就绪 (\(elapsed)s)")
                 return await doLogin()
-            }
-
-            // ② 没有登录框，且 hash 不是 #/login → 已处于登录状态，直接通过
-            if inputs <= 1 && !hash.contains("login") && bodyLen > 3000 {
-                log("已是登录状态 (\(elapsed)s)，跳过登录")
-                ready = true
-                return true
             }
         }
 
         lastError = "页面加载超时，请确认连的是 OPPO CPE 的 Wi-Fi"
-        log("✗ 12 秒内未能进入")
+        log("✗ 30 秒内未渲染出登录框")
         return false
     }
 
@@ -216,8 +203,8 @@ final class OppoBridge: NSObject, ObservableObject {
         var inputReady = false
         var lastState = ""
         for i in 0..<15 {
-            let st = await evalDirect("""
-            (function(){
+            let st = await jsCall("""
+            function(){
               return JSON.stringify({
                 inputs: document.querySelectorAll('input').length,
                 hash: location.hash,
@@ -225,7 +212,7 @@ final class OppoBridge: NSObject, ObservableObject {
                 bodyLen: (document.body ? document.body.innerHTML.length : 0),
                 hasBridge: typeof window.__oppoCall
               });
-            })()
+            }
             """)
             lastState = (st as? String) ?? "(nil)"
             if let str = st as? String,
@@ -247,38 +234,33 @@ final class OppoBridge: NSObject, ObservableObject {
             return false
         }
 
-        // 用 evalDirect 执行，但 Promise 需要额外等待——改成轮询 hash
-        _ = await evalDirect("""
-        (function(){
-          try {
-            var ins = document.querySelectorAll('input');
-            if (ins.length < 2) return 'NO_INPUT';
-            var setter = Object.getOwnPropertyDescriptor(
-              window.HTMLInputElement.prototype, 'value').set;
-            setter.call(ins[0], '\(jsEscape(user))');
-            ins[0].dispatchEvent(new Event('input', {bubbles:true}));
-            setter.call(ins[1], '\(jsEscape(password))');
-            ins[1].dispatchEvent(new Event('input', {bubbles:true}));
-            setTimeout(function(){
-              var btn = Array.prototype.slice.call(
-                document.querySelectorAll('button')).filter(function(b){
-                  return /LOGIN/i.test(b.textContent);
-                })[0];
-              if (btn) btn.click();
-            }, 400);
-            return 'SUBMITTED';
-          } catch(e) { return 'ERR:' + e.message; }
-        })()
-        """, timeout: 5)
+        let body = """
+        function(){
+          return new Promise(function(resolve){
+            try {
+              var ins = document.querySelectorAll('input');
+              if (ins.length < 2) { resolve('NO_INPUT'); return; }
+              var setter = Object.getOwnPropertyDescriptor(
+                window.HTMLInputElement.prototype, 'value').set;
+              setter.call(ins[0], '\(jsEscape(user))');
+              ins[0].dispatchEvent(new Event('input', {bubbles:true}));
+              setter.call(ins[1], '\(jsEscape(password))');
+              ins[1].dispatchEvent(new Event('input', {bubbles:true}));
 
-        // 等待跳转（最多 5 秒，一检测到就返回）
-        var hash = ""
-        for _ in 0..<20 {
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            let h = await evalDirect("location.hash", timeout: 1) ?? ""
-            hash = h
-            if !h.contains("login") && !h.isEmpty { break }
+              setTimeout(function(){
+                var btn = Array.prototype.slice.call(
+                  document.querySelectorAll('button')).filter(function(b){
+                    return /LOGIN|登录/i.test(b.textContent);
+                  })[0];
+                if (btn) btn.click();
+                setTimeout(function(){ resolve(location.hash); }, 2500);
+              }, 400);
+            } catch(e) { resolve('ERR:' + e.message); }
+          });
         }
+        """
+        let r = await jsCall(body)
+        let hash = (r as? String) ?? ""
         log("提交后 hash: \(hash)")
 
         if hash.contains("login") {
@@ -299,47 +281,34 @@ final class OppoBridge: NSObject, ObservableObject {
     func fetchDashboard() async -> [String: String] {
         guard ready else { return [:] }
 
-        // 不用 innerText（触发全页重排，很慢）
-        // 改为遍历叶子节点，直接拿「标签 → 值」
+        // 只在 JS 侧取一次 innerText，就地提取需要的行，减少跨进程传输
+        // 分隔符用 ||| 和 ###，避免 Swift 字符串转义冲突
         let body = """
-        (function(){
-          var want = {
-            'UL Data Rate':1,'DL Data Rate':1,'RSRP':1,'RSRQ':1,'SINR':1,
-            'PCI':1,'Frequency Band':1,'Network Status':1,'Carrier Aggregation':1,
-            'Total':1,'Upload':1,'Download':1,'Device Name':1,'Serial Number':1,
-            'Software Version':1,'Hardware Version':1,'Manufacturer Info':1,
-            'System Uptime':1,'CPU Usage':1,'Memory Usage':1,
-            'SSID 2.4 GHz':1,'SSID 5 GHz':1,'PLMN':1
-          };
+        function(){
+          var t = document.body.innerText;
+          if (!t) return '';
+          var lines = t.split('\n');
           var out = [];
-          var els = document.querySelectorAll('div, span, p, td, dd, label');
-          for (var i = 0; i < els.length; i++) {
-            var el = els[i];
-            if (el.children.length > 0) continue;
-            var t = (el.textContent || '').trim();
-            if (!want[t]) continue;
-            var box = el.parentElement;
-            if (!box) continue;
-            var full = (box.textContent || '').trim();
-            var v = full.substring(t.length).trim();
-            if (v) out.push(t + '###' + v);
+          var want = {};
+          ['UL Data Rate','DL Data Rate','RSRP','RSRQ','SINR','PCI',
+           'Frequency Band','Network Status','Carrier Aggregation',
+           'Total','Upload','Download','Device Name','Serial Number',
+           'Software Version','Hardware Version','Manufacturer Info',
+           'System Uptime','CPU Usage','Memory Usage',
+           'SSID 2.4 GHz','SSID 5 GHz','PLMN'].forEach(function(k){ want[k]=1; });
+          for (var i = 0; i < lines.length; i++) {
+            var l = lines[i].trim();
+            if (want[l] && i + 1 < lines.length) {
+              out.push(l + '###' + lines[i+1].trim());
+            }
           }
-          // 设备总数
-          var all = document.body ? (document.body.textContent || '') : '';
-          var m = all.match(/total of ([0-9]+) devices?/);
+          var m = t.match(/total of ([0-9]+) devices?/);
           if (m) out.push('_deviceCount###' + m[1]);
           return out.join('|||');
-        })()
-        """
-        let raw = await evalDirect(body) ?? ""
-        guard !raw.isEmpty else {
-            log("XDashboard 返回空")
-            // 诊断：单独读一次 innerText 看长度
-            let len = await evalDirect("(document.body ? document.body.innerText.length : -1)") ?? "nil"
-            log("  innerText 长度: " + len)
-            return [:]
         }
-        log("Dashboard 拿到 " + String(raw.count) + " 字符")
+        """
+        let raw = (await jsCall(body) as? String) ?? ""
+        guard !raw.isEmpty else { return [:] }
 
         // 解析成字典
         var d: [String: String] = [:]
@@ -353,198 +322,37 @@ final class OppoBridge: NSObject, ObservableObject {
         return OppoParser.parseFromPairs(d)
     }
 
-    /// 用 callAsyncJavaScript 直接等待 Promise，拿到累计字节数
-    /// 比"写全局变量 + 轮询读取"快得多，约 100ms
-    func fetchBytes() async -> (rx: Double, tx: Double) {
-        guard ready, let wv = webView else { return (0, 0) }
-
-        let js = """
-        var app = document.querySelector('#app');
-        var vm = app && app.__vue__;
-        var ax = null;
-        (function walk(v, d){
-          if (!v || d > 6 || ax) return;
-          if (v.$http) { ax = v.$http; return; }
-          (v.$children || []).forEach(function(c){ walk(c, d+1); });
-        })(vm, 0);
-        if (!ax) return '';
-        var r = await ax.post('/NetStats/GetStats', {});
-        var s = r && r.Stats && r.Stats[0];
-        if (!s) return '';
-        return JSON.stringify({rx: s.BytesReceived, tx: s.BytesSent});
-        """
-
-        return await withCheckedContinuation { (c: CheckedContinuation<(Double, Double), Never>) in
-            var done = false
-            let lock = NSLock()
-            let finish: ((Double, Double)) -> Void = { v in
-                lock.lock(); defer { lock.unlock() }
-                guard !done else { return }
-                done = true
-                c.resume(returning: v)
-            }
-
-            if #available(iOS 14.0, *) {
-                wv.callAsyncJavaScript(js,
-                                       arguments: [:],
-                                       in: nil,
-                                       in: .page) { result in
-                    guard let str = (try? result.get()) as? String,
-                          let d = str.data(using: .utf8),
-                          let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-                          let rx = o["rx"] as? NSNumber,
-                          let tx = o["tx"] as? NSNumber else {
-                        finish((0, 0)); return
-                    }
-                    finish((rx.doubleValue, tx.doubleValue))
-                }
-            } else {
-                finish((0, 0))
-            }
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { finish((0, 0)) }
-        }
-    }
-
-    /// 重启设备：调用 OPPO 的 /ommng/Reboot
-    func reboot() async -> Bool {
-        guard ready, let wv = webView else { return false }
-
-        let js = """
-        var app = document.querySelector('#app');
-        var vm = app && app.__vue__;
-        var ax = null;
-        (function walk(v, d){
-          if (!v || d > 6 || ax) return;
-          if (v.$http) { ax = v.$http; return; }
-          (v.$children || []).forEach(function(c){ walk(c, d+1); });
-        })(vm, 0);
-        if (!ax) return 'NO_AXIOS';
-        try {
-          var r = await ax.post('/ommng/Reboot', {});
-          return (r && r.ErrorCode === 0) ? 'OK' : ('ERR:' + JSON.stringify(r).slice(0,80));
-        } catch(e) {
-          // 重启时连接可能被切断，视为成功
-          return 'OK';
-        }
-        """
-
-        return await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
-            var done = false
-            let lock = NSLock()
-            let finish: (Bool) -> Void = { v in
-                lock.lock(); defer { lock.unlock() }
-                guard !done else { return }
-                done = true
-                c.resume(returning: v)
-            }
-
-            wv.callAsyncJavaScript(js, arguments: [:], in: nil, in: .page) { result in
-                if let str = (try? result.get()) as? String {
-                    finish(str.hasPrefix("OK"))
-                } else {
-                    finish(false)
-                }
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 6) { finish(true) }  // 超时也算发出
-        }
-    }
-
-    /// 只读取页面上的「实时上传/下载速率」
-    /// 首次扫描后缓存元素引用，之后只读 textContent（很快）
-    func fetchSpeeds() async -> (rx: Double, tx: Double) {
-        guard ready else { return (0, 0) }
-
-        let js = """
-        (function(){
-          function parseOne(el){
-            if (!el) return 0;
-            var box = el.parentElement;
-            if (!box) return 0;
-            var txt = box.textContent || '';
-            var m = txt.match(/([0-9.]+)[ ]*([KMGT]?)bps/i);
-            if (!m) return -1;
-            var val = parseFloat(m[1]);
-            var u = (m[2] || '').toUpperCase();
-            if (u === 'K') val /= 1000;
-            else if (u === 'G') val *= 1000;
-            else if (u === 'T') val *= 1000000;
-            return val;
-          }
-
-          // 有缓存且仍能解析，直接用
-          if (window.__spdEls && window.__spdEls.dl && window.__spdEls.ul) {
-            var d1 = parseOne(window.__spdEls.dl);
-            var u1 = parseOne(window.__spdEls.ul);
-            if (d1 >= 0 && u1 >= 0) {
-              return JSON.stringify({dl: d1, ul: u1});
-            }
-          }
-
-          // 重新扫描
-          var dlEl = null, ulEl = null;
-          var els = document.querySelectorAll('div, span, p, td, dd, label');
-          for (var i = 0; i < els.length; i++) {
-            if (els[i].children.length > 0) continue;   // 只查叶子节点
-            var t = (els[i].textContent || '').trim();
-            if (t === 'DL Data Rate') dlEl = els[i];
-            else if (t === 'UL Data Rate') ulEl = els[i];
-            if (dlEl && ulEl) break;
-          }
-          window.__spdEls = {dl: dlEl, ul: ulEl};
-          return JSON.stringify({dl: parseOne(dlEl), ul: parseOne(ulEl)});
-        })()
-        """
-
-        guard let str = await evalDirect(js, timeout: 2),
-              let d = str.data(using: .utf8),
-              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
-            return (0, 0)
-        }
-        let dl = max(0, (o["dl"] as? NSNumber)?.doubleValue ?? 0)
-        let ul = max(0, (o["ul"] as? NSNumber)?.doubleValue ?? 0)
-        return (dl, ul)
-    }
-
     /// 调用 NetStats/GetStats 拿精确流量与实时速率
     /// 返回：BytesReceived / BytesSent / RateReceived / RateSent
     func fetchStats() async -> [String: Any] {
         guard ready else { return [:] }
 
-        // Promise 结果写到全局变量，再轮询读取
-        _ = await evalDirect("""
-        (function(){
-          window.__statsResult = null;
-          try {
-            var app = document.querySelector('#app');
-            var vm = app && app.__vue__;
-            var ax = null;
-            (function walk(v, d){
-              if (!v || d > 6 || ax) return;
-              if (v.$http) { ax = v.$http; return; }
-              (v.$children || []).forEach(function(c){ walk(c, d+1); });
-            })(vm, 0);
-            if (!ax) { window.__statsResult = '{"error":"no_axios"}'; return 'ok'; }
-            ax.post('/NetStats/GetStats', {}).then(function(r){
-              var s = r && r.Stats && r.Stats[0];
-              window.__statsResult = s ? JSON.stringify({
-                rx: s.BytesReceived, tx: s.BytesSent,
-                rateRx: s.RateReceived, rateTx: s.RateSent
-              }) : '{"error":"no_stats"}';
-            }).catch(function(e){ window.__statsResult = '{"error":"' + String(e) + '"}'; });
-            return 'ok';
-          } catch(e) { window.__statsResult = '{"error":"' + e.message + '"}'; return 'ok'; }
-        })()
-        """, timeout: 5)
+        let body = """
+        function(){
+          // 从 Vue 根实例拿带拦截器的 axios
+          var app = document.querySelector('#app');
+          var vm = app && app.__vue__;
+          var ax = null;
+          (function walk(v, d){
+            if (!v || d > 6 || ax) return;
+            if (v.$http) { ax = v.$http; return; }
+            (v.$children || []).forEach(function(c){ walk(c, d+1); });
+          })(vm, 0);
+          if (!ax) return JSON.stringify({error:'no_axios'});
 
-        // 轮询读取结果
-        var str: String?
-        for _ in 0..<10 {
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            str = await evalDirect("window.__statsResult || ''", timeout: 2)
-            if let v = str, !v.isEmpty, v != "null" { break }
+          return ax.post('/NetStats/GetStats', {}).then(function(r){
+            var s = r && r.Stats && r.Stats[0];
+            if (!s) return JSON.stringify({error:'no_stats'});
+            return JSON.stringify({
+              rx: s.BytesReceived,
+              tx: s.BytesSent,
+              rateRx: s.RateReceived,
+              rateTx: s.RateSent
+            });
+          });
         }
-        guard let str = str,
+        """
+        guard let str = await jsCall(body) as? String,
               let d = str.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
             return [:]
@@ -554,57 +362,28 @@ final class OppoBridge: NSObject, ObservableObject {
 
     // MARK: 底层
 
-    /// 直接执行 JS 并返回结果（不依赖 __oppoCall 注入脚本）
-    /// 用于页面脚本注入失效时的兜底
-    func evalDirect(_ js: String, timeout: TimeInterval = 3) async -> String? {
-        guard let wv = webView else { return nil }
-        return await withCheckedContinuation { (c: CheckedContinuation<String?, Never>) in
-            var done = false
-            let lock = NSLock()
-            let finish: (String?) -> Void = { v in
-                lock.lock(); defer { lock.unlock() }
-                guard !done else { return }
-                done = true
-                c.resume(returning: v)
-            }
-            wv.evaluateJavaScript(js) { r, e in
-                if e != nil { finish(nil) }
-                else if let s = r as? String { finish(s) }
-                else if let r = r { finish(String(describing: r)) }
-                else { finish(nil) }
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { finish(nil) }
-        }
-    }
-
-    /// 自检：验证 WebView 的 JS 引擎能否执行
-    func selfTest() async -> String {
-        guard let wv = webView else { return "X WebView 未初始化" }
-
-        return await withCheckedContinuation { (c: CheckedContinuation<String, Never>) in
-            var done = false
-            let lock = NSLock()
-            let finish: (String) -> Void = { v in
-                lock.lock(); defer { lock.unlock() }
-                guard !done else { return }
-                done = true
-                c.resume(returning: v)
-            }
-            wv.evaluateJavaScript("1+1") { r, e in
-                if let e = e { finish("X JS 错误: " + e.localizedDescription) }
-                else { finish("OK JS 可用, 结果=" + String(describing: r)) }
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { finish("X JS 超时(3s) - 引擎被暂停") }
-        }
-    }
-
-    private func jsCall(_ fn: String) async -> Any? {
+    /// 执行 JS，返回结果。
+    /// 用 callbacks 表管理，保证每个 continuation 只 resume 一次。
+    private func jsCall(_ fn: String, timeout: TimeInterval = 3) async -> Any? {
         guard let wv = webView else { return nil }
         seq += 1
         let cid = "o\(seq)"
 
         return await withCheckedContinuation { (cont: CheckedContinuation<Any?, Never>) in
-            callbacks[cid] = { cont.resume(returning: $0) }
+            // 用一个标志保证只 resume 一次
+            var finished = false
+            let lock = NSLock()
+
+            let finish: (Any?) -> Void = { value in
+                lock.lock()
+                defer { lock.unlock() }
+                guard !finished else { return }
+                finished = true
+                cont.resume(returning: value)
+            }
+
+            callbacks[cid] = { v in finish(v) }
+
             let wrapped = "window.__oppoCall(\(quote(cid)), \(quote(fn)));"
             wv.evaluateJavaScript(wrapped) { _, err in
                 if let err = err {
@@ -615,7 +394,7 @@ final class OppoBridge: NSObject, ObservableObject {
                 }
             }
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self] in
                 if let cb = self?.callbacks.removeValue(forKey: cid) { cb(nil) }
             }
         }
