@@ -17,8 +17,6 @@ struct LoginView: View {
     @State private var autoLogin = true
     @State private var logs: [String] = []
     @State private var showLogs = true
-    @State private var detecting = false
-    @State private var hasAutoDetected = false
     @FocusState private var focus: Field?
 
     private enum Field { case host, user, pass }
@@ -28,39 +26,27 @@ struct LoginView: View {
             ZStack {
                 background.ignoresSafeArea()
 
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        header
-                        formCard
-                            .padding(.top, 22)
-                        FooterLog(logs: logs, expanded: $showLogs)
-                            .padding(.top, 20)
-                        Spacer().frame(height: 30)
+                VStack(spacing: 0) {
+                    // 标题固定在顶部，不跟随滚动
+                    header
+                        .padding(.horizontal, 20)
+                        .padding(.top, 12)
+                        .padding(.bottom, 16)
+
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            formCard
+                            FooterLog(logs: logs, expanded: $showLogs)
+                                .padding(.top, 20)
+                            Spacer().frame(height: 40)
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 8)
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 20)
+                    .scrollDismissesKeyboard(.interactively)
                 }
-                .scrollDismissesKeyboard(.interactively)
             }
             .navigationBarHidden(true)
-        }
-        .task {
-            guard !hasAutoDetected else { return }
-            hasAutoDetected = true
-
-            // 先快速带出上次设备（立刻有内容显示）
-            let saved = ProfileStore.active ?? ProfileStore.loadAll().first
-            if let p = saved {
-                vendor = p.vendor
-                host = p.host
-                user = p.user
-                password = p.password
-                addLog("上次设备：\(p.vendor.displayName) @ \(p.host)")
-            }
-
-            // 打开即静默识别当前设备（无按钮，用户无感）
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            await autoDetect(preferred: saved)
         }
         .sheet(isPresented: $showVendorPicker) {
             VendorPicker(current: vendor, onSelect: selectVendor)
@@ -127,7 +113,9 @@ struct LoginView: View {
                     HStack(spacing: 12) {
                         Group {
                             if let v = vendor {
-                                Image(v.logoAsset).resizable().scaledToFit()
+                                Image(v.logoAsset)
+                                    .resizable()
+                                    .scaledToFit()
                             } else {
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                                     .fill(Color.blue.opacity(0.15))
@@ -158,7 +146,6 @@ struct LoginView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-
             }
 
             fieldBlock("管理地址", placeholder: "请先选择设备厂商",
@@ -232,7 +219,6 @@ struct LoginView: View {
             }
             .padding(.top, 2)
 
-
             // 连接按钮
             Button {
                 Task { await doConnect() }
@@ -254,7 +240,14 @@ struct LoginView: View {
             .padding(.top, 4)
         }
         .padding(18)
-        .liquidGlass(radius: 24, strong: true)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(scheme == .dark ? Color.white.opacity(0.06) : Color.white.opacity(0.75))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .strokeBorder(Color.primary.opacity(scheme == .dark ? 0.12 : 0.06), lineWidth: 1)
+        )
     }
 
     private var pwdPrompt: Text {
@@ -318,59 +311,6 @@ struct LoginView: View {
     }
 
     private var canReveal: Bool { !user.trimmingCharacters(in: .whitespaces).isEmpty }
-
-    /// 自动扫描局域网并识别设备
-    /// - Parameter preferred: 上次使用的设备（找到相同设备时沿用其密码）
-    private func autoDetect(preferred: CpeProfile? = nil) async {
-        guard !detecting else { return }
-        detecting = true
-        addLog("正在检测当前连接的设备…")
-
-        let results = await CpeDetector.detect()
-        detecting = false
-
-        guard let first = results.first else {
-            addLog("✗ 未检测到可识别的设备")
-            if preferred != nil {
-                addLog("  保持上次设备设置")
-            } else {
-                addLog("  请确认已连接 CPE 的 Wi-Fi")
-            }
-            return
-        }
-
-        let old = preferred ?? (vendor != nil ? CpeProfile.make(vendor: vendor!) : nil)
-        let changed = (old?.vendor != first.vendor) || (old?.host != first.host)
-
-        vendor = first.vendor
-        host = first.host
-        user = first.vendor.defaultUser
-        Haptic.success()
-
-        addLog("✓ 当前设备：\(first.vendor.displayName) @ \(first.host)（\(first.evidence)）")
-        if changed, let o = old {
-            addLog("  已从 \(o.vendor.displayName) @ \(o.host) 切换")
-        }
-
-        // 匹配已保存的密码
-        if let saved = ProfileStore.loadAll().first(where: {
-            $0.vendor == first.vendor && $0.host == first.host && !$0.password.isEmpty
-        }) {
-            password = saved.password
-            addLog("  已填入保存的密码")
-        } else {
-            password = ""
-            addLog("  请输入密码")
-        }
-
-        // 不自动弹键盘，用户点了输入框再说
-
-        // 有密码 + 开了自动登录 → 直接连
-        if !password.isEmpty && autoLogin && !busy {
-            addLog("  自动登录…")
-            await doConnect()
-        }
-    }
 
     private func selectVendor(_ v: CpeVendor) {
         vendor = v
