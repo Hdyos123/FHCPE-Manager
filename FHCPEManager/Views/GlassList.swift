@@ -6,7 +6,7 @@ struct GlassListBackground: View {
 
     var body: some View {
         ZStack {
-            // 底色渐变
+            // 浅色：淡蓝白渐变  深色：深蓝黑渐变
             LinearGradient(
                 colors: scheme == .dark
                     ? [Color(red: 0.07, green: 0.09, blue: 0.15),
@@ -18,36 +18,8 @@ struct GlassListBackground: View {
                 startPoint: .top,
                 endPoint: .bottom
             )
-
-            // 光斑：让液态玻璃有东西可折射
-            GeometryReader { geo in
-                let w = geo.size.width
-                let h = geo.size.height
-                ZStack {
-                    Circle()
-                        .fill(Color(red: 0.35, green: 0.55, blue: 0.98))
-                        .frame(width: w * 0.85)
-                        .blur(radius: 90)
-                        .opacity(scheme == .dark ? 0.32 : 0.30)
-                        .offset(x: -w * 0.30, y: -h * 0.32)
-
-                    Circle()
-                        .fill(Color(red: 0.62, green: 0.42, blue: 0.96))
-                        .frame(width: w * 0.75)
-                        .blur(radius: 100)
-                        .opacity(scheme == .dark ? 0.28 : 0.24)
-                        .offset(x: w * 0.34, y: -h * 0.10)
-
-                    Circle()
-                        .fill(Color(red: 0.20, green: 0.80, blue: 0.72))
-                        .frame(width: w * 0.80)
-                        .blur(radius: 110)
-                        .opacity(scheme == .dark ? 0.24 : 0.20)
-                        .offset(x: -w * 0.20, y: h * 0.34)
-                }
-            }
+            .ignoresSafeArea()
         }
-        .ignoresSafeArea()
     }
 }
 
@@ -59,27 +31,12 @@ struct GlassRowModifier: ViewModifier {
         content
             .listRowBackground(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(.ultraThinMaterial)
+                    .fill(scheme == .dark
+                          ? Color.white.opacity(0.09)
+                          : Color.white.opacity(0.62))
                     .overlay(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(scheme == .dark
-                                  ? Color.white.opacity(0.045)
-                                  : Color.white.opacity(0.42))
-                    )
-                    .overlay(
-                        // 顶部高光描边
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(
-                                LinearGradient(
-                                    colors: [
-                                        Color.white.opacity(scheme == .dark ? 0.30 : 0.92),
-                                        Color.white.opacity(scheme == .dark ? 0.05 : 0.28),
-                                        Color.black.opacity(scheme == .dark ? 0.18 : 0.04)
-                                    ],
-                                    startPoint: .top, endPoint: .bottom
-                                ),
-                                lineWidth: 0.8
-                            )
+                            .strokeBorder(Color.white.opacity(scheme == .dark ? 0.16 : 0.85), lineWidth: 0.8)
                     )
                     .padding(.vertical, 2)
                     .padding(.horizontal, 4)
@@ -94,10 +51,6 @@ extension View {
         self
             .scrollContentBackground(.hidden)
             .background(GlassListBackground())
-            .safeAreaInset(edge: .bottom) {
-                Color.clear.frame(height: 78)
-            }
-
     }
 
     /// 应用到 List Row 上：玻璃卡片
@@ -140,7 +93,7 @@ struct GlassCard: ViewModifier {
 
 extension View {
     func glassCard(radius: CGFloat = 24, strong: Bool = false) -> some View {
-        liquidGlass(radius: radius, strong: strong)
+        modifier(GlassCard(radius: radius, strong: strong))
     }
 }
 
@@ -149,16 +102,17 @@ extension View {
 
 /// 实测阈值：≥125 爆速 / ≥100 极速 / ≥20 正常 / ≥5 偏慢 / 其余异常
 enum SpeedTier {
-    case ultra, fast, good, slow, bad
+    case ultra, fast, good, normal, slow, bad
 
-    /// 阈值按 5G 实测校准
-    /// 130-150 常见峰速要能落到「满速」紫档
+    /// 阈值按 5G 实际体验划分（参考下行可用带宽）
+    /// 之前 5Mbps 就算「疾驰」太离谱，已重新校准
     static func of(_ mbps: Double) -> SpeedTier {
-        if mbps >= 120 { return .ultra }    // 满速，紫
-        if mbps >= 60  { return .fast }     // 高速，青绿
-        if mbps >= 25  { return .good }     // 流畅，蓝
-        if mbps >= 2   { return .slow }     // 偏慢，橙
-        return .bad                         // 卡顿，红
+        if mbps >= 300 { return .ultra }    // 满速 SAC/载波聚合
+        if mbps >= 100 { return .fast }     // 高速
+        if mbps >= 30  { return .good }     // 良好，可流畅看 4K
+        if mbps >= 10  { return .normal }   // 一般
+        if mbps >= 2   { return .slow }     // 偏慢，勉强刷视频
+        return .bad                         // 卡顿
     }
 
     var color: Color {
@@ -166,6 +120,7 @@ enum SpeedTier {
         case .ultra:  return Color(red: 0.55, green: 0.36, blue: 0.96)  // 紫
         case .fast:   return Color(red: 0.09, green: 0.72, blue: 0.65)  // 青绿
         case .good:   return Color(red: 0.24, green: 0.55, blue: 0.99)  // 蓝
+        case .normal: return Color(red: 0.55, green: 0.60, blue: 0.72)  // 灰蓝
         case .slow:   return Color(red: 0.94, green: 0.63, blue: 0.29)  // 橙
         case .bad:    return Color(red: 0.90, green: 0.34, blue: 0.30)  // 红
         }
@@ -176,6 +131,7 @@ enum SpeedTier {
         case .ultra:  return "满速"
         case .fast:   return "高速"
         case .good:   return "流畅"
+        case .normal: return "一般"
         case .slow:   return "偏慢"
         case .bad:    return "卡顿"
         }
@@ -186,6 +142,7 @@ enum SpeedTier {
         case .ultra:  return "🚀"
         case .fast:   return "⚡"
         case .good:   return "✅"
+        case .normal: return "➖"
         case .slow:   return "🐢"
         case .bad:    return "🐌"
         }
