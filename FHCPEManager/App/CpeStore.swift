@@ -76,6 +76,10 @@ final class CpeStore: ObservableObject {
     private let bridge = CpeBridge.shared
     private var pollTask: Task<Void, Never>?
     private var lastTick = Date()
+    /// 当前是否有 fetchStatus 在执行（防止自愈重复启动造成请求雪崩）
+    private var fetching = false
+    /// 正在执行的 fetchStatus 任务（防叠加）
+    private var inFlightWork: Task<Void, Never>?
 
     /// 连续失败次数
     private var _failStreak = 0
@@ -1048,19 +1052,61 @@ final class CpeStore: ObservableObject {
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                await self.fetchStatus()
+                self.fetching = true
+                await self.fetchStatusGuarded()
                 self.lastTick = Date()
+                self.fetching = false
                 let ns = UInt64(max(0.5, self.refreshInterval) * 1_000_000_000)
                 try? await Task.sleep(nanoseconds: ns)
+                if Task.isCancelled { break }
             }
         }
     }
 
-    /// 自愈：超过 3 倍间隔无心跳说明轮询被系统挂起，重启它
+    /// 自愈检查
+    ///
+    /// 旧实现「超过 3 秒没更新就重启」会导致请求雪崩：
+    /// fetchStatus 正常就要 1-2 秒，网络抖动时反复重启，
+    /// 旧任务未结束新任务又来，最后连接池耗尽。
     func ensurePollingAlive() {
         guard isLoggedIn else { return }
-        if Date().timeIntervalSince(lastTick) > max(3.0, refreshInterval * 3) {
+
+        // 有请求在跑 → 轮询活着，绝不重启
+        if fetching { return }
+
+        // 轮询任务已停止 → 重启
+        if pollTask == nil || (pollTask?.isCancelled ?? true) {
             startPolling(force: true)
+            return
+        }
+
+        // 超过 20 秒没有任何进展 → 认为真卡死
+        if Date().timeIntervalSince(lastTick) > 20 {
+            startPolling(force: true)
+        }
+    }
+
+    /// 带 10 秒硬超时的状态刷新，并防止请求叠加
+    private func fetchStatusGuarded() async {
+        if inFlightWork != nil { return }
+
+        let work = Task { @MainActor in await self.fetchStatus() }
+        inFlightWork = work
+        let timer = Task { try? await Task.sleep(nanoseconds: 10_000_000_000) }
+
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await work.value }
+            group.addTask { await timer.value }
+            await group.next()
+            group.cancelAll()
+        }
+        timer.cancel()
+        work.cancel()
+        inFlightWork = nil
+
+        // 超时后计一次失败，让重登逻辑感知
+        if Date().timeIntervalSince(lastTick) >= 10 {
+            failStreak += 1
         }
     }
 
