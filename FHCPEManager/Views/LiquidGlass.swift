@@ -63,31 +63,10 @@ private struct GlassBackdrop: View {
         GeometryReader { geo in
             let size = geo.size
             ZStack {
-                if #available(iOS 26.0, *) {
-                    // iOS 26+：系统原生液态玻璃（真折射 + 边缘形变）
-                    // 编译宏保护：Xcode 26 SDK 才有 glassEffect 符号
-                    #if compiler(>=6.2)
-                    Color.clear
-                        .glassEffect(.regular.interactive(),
-                                     in: .rect(cornerRadius: radius, style: .continuous))
-                    #else
-                    // 旧工具链兜底：shader 折射
-                    Rectangle()
-                        .fill(.ultraThinMaterial)
-                        .layerEffect(
-                            ShaderLibrary.liquidGlassRefraction(
-                                .float2(Float(size.width), Float(size.height)),
-                                .float(radius),
-                                .float(26),
-                                .float(strong ? 16 : 11),
-                                .float3(Float(tintRGB.0), Float(tintRGB.1), Float(tintRGB.2)),
-                                .float(scheme == .dark ? 0.16 : 0.06),
-                                .float(.pi * 1.25)
-                            ),
-                            maxSampleOffset: CGSize(width: 24, height: 24)
-                        )
-                    #endif
-                } else if #available(iOS 17.0, *) {
+                // 注意：不再使用 iOS 26 的 glassEffect。
+                // 实测在 iOS 26 上会与下方的实体感 / 高光层叠加，
+                // 产生白色斜纹渲染异常，故统一走 shader / 材质方案。
+                if #available(iOS 17.0, *) {
                     Rectangle()
                         .fill(.ultraThinMaterial)
                         .layerEffect(
