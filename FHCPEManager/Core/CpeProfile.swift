@@ -34,10 +34,11 @@ enum CpeVendor: String, CaseIterable, Codable {
         switch self {
         case .fiberhome: return "LG6121F 等烽火 5G CPE"
         case .oppo:      return "OPPO 5G CPE T1 / T2 系列"
-        case .huawei:    return "华为 5G CPE / 移动路由"
+        case .huawei:    return "H153 / H155 等华为 5G CPE"
         }
     }
 
+    /// SF Symbol 兜底
     var icon: String {
         switch self {
         case .fiberhome: return "antenna.radiowaves.left.and.right"
@@ -60,7 +61,7 @@ enum CpeVendor: String, CaseIterable, Codable {
         switch self {
         case .fiberhome: return false
         case .oppo:      return true
-        case .huawei:    return false
+        case .huawei:    return false   // 华为走原生 XML API
         }
     }
 }
@@ -127,62 +128,14 @@ enum ProfileStore {
         }
     }
 
-    /// 保存档案：按「厂商 + 地址」去重，同一台设备只保留一条
     static func upsert(_ profile: CpeProfile) {
         var list = loadAll()
-
         if let i = list.firstIndex(where: { $0.id == profile.id }) {
             list[i] = profile
-            saveAll(list)
-            return
+        } else {
+            list.append(profile)
         }
-
-        // 同厂商 + 同地址 → 视为同一台设备
-        if let i = list.firstIndex(where: {
-            $0.vendor == profile.vendor && $0.host == profile.host
-        }) {
-            var updated = profile
-            updated.id = list[i].id
-            if !list[i].name.isEmpty { updated.name = list[i].name }
-            list[i] = updated
-            saveAll(list)
-            return
-        }
-
-        list.append(profile)
         saveAll(list)
-    }
-
-    /// 兼容旧调用：等同 upsert
-    static func upsertOppo(_ profile: CpeProfile) {
-        upsert(profile)
-    }
-
-    /// 清理重复档案（同厂商+地址只保留一条）
-    static func dedupe() {
-        let all = loadAll()
-        var list = all
-        guard !list.isEmpty else { return }
-        var seen: [String: CpeProfile] = [:]
-        var result: [CpeProfile] = []
-        for p in list {
-            let key = p.vendor.rawValue + "|" + p.host
-            if let existing = seen[key] {
-                // 保留有密码的那条
-                if existing.password.isEmpty && !p.password.isEmpty {
-                    if let i = result.firstIndex(where: { $0.id == existing.id }) {
-                        result[i] = p
-                        seen[key] = p
-                    }
-                }
-            } else {
-                seen[key] = p
-                result.append(p)
-            }
-        }
-        if result.count != list.count {
-            saveAll(result)
-        }
     }
 
     static func delete(_ profile: CpeProfile) {
