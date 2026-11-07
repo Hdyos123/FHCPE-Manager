@@ -18,6 +18,12 @@ final class HuaweiAPI {
     private var pass = ""
     private var token = ""
     private var cookies: [String: String] = [:]
+    /// 诊断日志
+    private(set) var trace: [String] = []
+    private func log(_ s: String) {
+        trace.append(s)
+        if trace.count > 40 { trace.removeFirst() }
+    }
 
     private let session: URLSession
 
@@ -36,6 +42,7 @@ final class HuaweiAPI {
         self.pass = pass
         self.token = ""
         self.cookies = [:]
+        self.trace = []
     }
 
     // MARK: - 底层
@@ -73,23 +80,30 @@ final class HuaweiAPI {
                          forHTTPHeaderField: "Content-Type")
         }
 
-        let (data, resp) = try await session.data(for: req)
+        let (data, resp): (Data, URLResponse)
+        do {
+            (data, resp) = try await session.data(for: req)
+        } catch {
+            log("✗ 请求失败 \(path): \(error.localizedDescription)")
+            throw error
+        }
         guard let http = resp as? HTTPURLResponse else { throw HError.badResponse }
+        log("GET \(path) -> \(http.statusCode)")
 
-        // 抓 Set-Cookie
-        if let hs = http.allHeaderFields as? [String: Any] {
-            for (k, v) in hs where (k as? String)?.lowercased() == "set-cookie" {
-                if let s = v as? String {
-                    for part in s.components(separatedBy: ",") {
-                        let kv = part.components(separatedBy: ";").first ?? ""
-                        let pair = kv.components(separatedBy: "=")
-                        if pair.count >= 2 {
-                            let name = pair[0].trimmingCharacters(in: .whitespaces)
-                            let value = pair.dropFirst().joined(separator: "=")
-                                .trimmingCharacters(in: .whitespaces)
-                            if !name.isEmpty { cookies[name] = value }
-                        }
-                    }
+        // 抓 Set-Cookie（allHeaderFields 可能大小写不一，遍历所有头）
+        for (k, v) in http.allHeaderFields {
+            let key = String(describing: k).lowercased()
+            guard key == "set-cookie" else { continue }
+            let raw = String(describing: v)
+            // 可能有多条，用逗号分隔，但 Expires 里也有逗号，需小心
+            for chunk in raw.components(separatedBy: ",SessionID=") {
+                let seg = chunk.hasPrefix("SessionID=") ? chunk : "SessionID=" + chunk
+                let first = seg.components(separatedBy: ";").first ?? ""
+                guard let eq = first.firstIndex(of: "=") else { continue }
+                let name = String(first[first.startIndex..<eq]).trimmingCharacters(in: .whitespaces)
+                let value = String(first[first.index(after: eq)...]).trimmingCharacters(in: .whitespaces)
+                if !name.isEmpty && !value.isEmpty {
+                    cookies[name] = value
                 }
             }
         }
@@ -102,12 +116,18 @@ final class HuaweiAPI {
         let txt = try await request("/api/webserver/SesTokInfo")
         if let t = xmlValue(txt, tag: "TokInfo") {
             token = t.replacingOccurrences(of: "&amp;", with: "&")
+            log("token 获取成功 (\(token.count) 字符)")
+        } else {
+            log("✗ token 解析失败: \(txt.prefix(80))")
         }
+        log("Cookie: \(cookies.keys.joined(separator: ","))")
     }
 
     // MARK: - 登录
 
     func login() async throws {
+        trace.removeAll()
+        log("开始登录 \(host)")
         try await refreshToken()
 
         // 密码：SHA256 → Base64
@@ -119,11 +139,16 @@ final class HuaweiAPI {
                 + "<password_type>4</password_type></request>"
 
         let r = try await request("/api/user/login", method: "POST", body: xml)
-        if r.contains("<response>OK</response>") {
-            // 登录成功（部分固件 State 仍为 -1，但基础接口可用）
+        let compact = r.replacingOccurrences(of: " ", with: "")
+                         .replacingOccurrences(of: "\n", with: "")
+                         .replacingOccurrences(of: "\r", with: "")
+                         .replacingOccurrences(of: "\t", with: "")
+        if compact.contains("<response>OK</response>") {
+            log("✓ 登录返回 OK")
             try await refreshToken()
             return
         }
+        log("✗ 登录返回: \(r.prefix(80))")
         if r.contains("<code>108006</code>") {
             throw HError.locked
         }
