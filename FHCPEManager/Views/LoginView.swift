@@ -364,9 +364,11 @@ struct LoginView: View {
             store.startPolling()
         } else {
             addLog("✗ " + (store.errorText ?? "连接失败"))
-            // OPPO 桥接日志也贴出来
             if v == .oppo {
                 for t in OppoBridge.shared.trace { addLog("  " + t) }
+            }
+            if v == .huawei {
+                for t in HuaweiAPI.shared.trace { addLog("  " + t) }
             }
         }
     }
