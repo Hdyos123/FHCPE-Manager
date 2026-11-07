@@ -22,6 +22,9 @@ targets:
         excludes:
           - "Resources/Info.plist"
           - "Resources/Bridging-Header.h"
+          - "**/*.new"
+          - "**/*.bak"
+          - "**/*.orig"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.cpemanager.ultra
