@@ -259,11 +259,24 @@ final class HuaweiAPI {
         let code = http?.statusCode ?? 0
 
         // 设备可能通过 Set-Cookie 下发新会话，必须跟上
+        // 注意：allHeaderFields 值可能是 String 也可能是 Array<String>
         if let headers = http?.allHeaderFields {
             for (k, v) in headers {
                 let key = (k as? String) ?? "\(k)"
-                if key.lowercased() == "set-cookie",
-                   let raw = v as? String {
+                guard key.lowercased() == "set-cookie" else { continue }
+
+                var raws: [String] = []
+                if let s = v as? String {
+                    raws = s.components(separatedBy: ",SessionID=")
+                        .enumerated()
+                        .map { $0.offset > 0 ? "SessionID=" + $0.element : $0.element }
+                } else if let arr = v as? [String] {
+                    raws = arr
+                } else {
+                    raws = ["\(v)"]
+                }
+
+                for raw in raws {
                     let cookie = Self.cookieOnly(raw)
                     if !cookie.isEmpty { sessionCookie = cookie }
                 }
