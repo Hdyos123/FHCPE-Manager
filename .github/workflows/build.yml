@@ -45,6 +45,13 @@ jobs:
           echo "BUILD=$BUILD" >> $GITHUB_ENV
           echo "version=$VER build=$BUILD"
 
+      - name: Clean stray files
+        run: |
+          find . -name "*.swift.new" -o -name "*.swift.bak" -o -name "*.swift.orig" | xargs -r rm -v
+          find . -name "*~" -delete
+          echo "残留检查："
+          find . -name "*.new" -o -name "*.bak" | head || true
+
       - name: Generate Xcode project
         run: |
           xcodegen generate
