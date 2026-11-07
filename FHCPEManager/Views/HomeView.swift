@@ -259,6 +259,17 @@ struct HomeView: View {
     }
 
     /// 温度配色：<42 散热良好，42~50 偏热，>50 过热
+
+    /// 信号等级判定
+    private func signalQuality(_ r: Double) -> (label: String, color: Color) {
+        if r == 0 { return ("未知", .secondary) }
+        if r >= -85 { return ("极佳", Color(red: 0.15, green: 0.82, blue: 0.45)) }
+        if r >= -95 { return ("良好", Color(red: 0.40, green: 0.78, blue: 0.40)) }
+        if r >= -105 { return ("一般", Color(red: 0.98, green: 0.75, blue: 0.25)) }
+        if r >= -115 { return ("较差", Color(red: 0.96, green: 0.55, blue: 0.25)) }
+        return ("很差", Color(red: 0.94, green: 0.32, blue: 0.30))
+    }
+
     private func tempColor(_ t: Double) -> Color {
         if t >= 50 { return .red }
         if t >= 42 { return .orange }
