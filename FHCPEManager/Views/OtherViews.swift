@@ -17,19 +17,33 @@ struct ControlView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 12) {
-                    mobileDataCard
-                    if store.isOppo { oppoNote }
-                    else if store.isHuawei { huaweiControlCard }
-                    else { carrierCard }
-                    actionCard
-                    rebootCard
+                VStack(spacing: 14) {
+                    statusBanner
+
+                    // 开关列表（华为同款横排卡片）
+                    VStack(spacing: 10) {
+                        switchRow("飞行模式", "关闭蜂窝与 Wi-Fi 之外的所有无线发射",
+                                  CpeNode.netSet + "airplan_on",
+                                  "airplane", .orange)
+                        switchRow("数据漫游", "绑定允许在国内网络以外使用数据",
+                                  CpeNode.netSet + "RoamingEnable",
+                                  "globe.americas.fill", .blue)
+                        switchRow("VoLTE", "通话时保持 4G/5G 数据连接",
+                                  CpeNode.netSet + "volte_switch",
+                                  "phone.connection", .green)
+                        switchRow("载波聚合", "多个载波同时传输，提升峰值速率",
+                                  "X_FH_MobileNetwork.NetworkInfo.CaEnable",
+                                  "arrow.triangle.merge", .purple)
+                    }
+
+                    rebootButton
                 }
                 .padding(.horizontal, 14)
                 .padding(.top, 8)
-                .padding(.bottom, 28)
+                .padding(.bottom, 102)
             }
-            .background(AppBackground())
+            .scrollContentBackground(.hidden)
+            .background(GlassListBackground())
             .navigationTitle("控制")
             .alert("确认操作", isPresented: Binding(
                 get: { pendingToggle != nil },
@@ -51,8 +65,7 @@ struct ControlView: View {
                     Haptic.warning()
                     Task {
                         let ok = await store.reboot()
-                        store.toast(ok ? "重启指令已发送" : "重启失败",
-                                    kind: ok ? .success : .error)
+                        store.toast(ok ? "重启指令已发送" : "重启失败", kind: ok ? .success : .error)
                     }
                 }
             } message: {
@@ -61,263 +74,101 @@ struct ControlView: View {
         }
     }
 
-    // MARK: 移动数据（大卡）
+    // MARK: 组件
 
-    private var mobileDataCard: some View {
-        PanelCard(padding: 16) {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 6) {
-                    Image(systemName: "antenna.radiowaves.left.and.right")
-                        .font(.system(size: 11))
-                    Text("移动数据")
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .foregroundStyle(.blue)
-
-                Text(s["netmode"] == "3" ? "5G SA" : (s["netmode"] == "2" ? "4G" : "5G"))
-                    .font(.system(size: 34, weight: .bold, design: .rounded))
-
-                Text(s.carrierName + " · " + (s.isOnline ? "已联网" : "未联网"))
-                    .font(.system(size: 12.5))
+    private var statusBanner: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(s.isOnline ? Color.green : Color.red)
+                .frame(width: 8, height: 8)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(s.isOnline ? "网络正常" : "网络异常")
+                    .font(.system(size: 14, weight: .semibold))
+                Text(s.carrierName + " · N" + (s["band"].isEmpty ? "--" : s["band"]))
+                    .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
-
-                HStack(spacing: 10) {
-                    bigStatTile("移动数据",
-                                value: s.isOnline ? "已联网" : "未联网",
-                                icon: "antenna.radiowaves.left.and.right",
-                                tint: Color(red: 0.36, green: 0.55, blue: 1.0),
-                                filled: true)
-                    bigStatTile("VoLTE",
-                                value: isOn(CpeNode.netSet + "volte_switch") ? "已开启" : "已关闭",
-                                icon: "phone.circle",
-                                tint: Color(red: 0.65, green: 0.5, blue: 0.98))
-                }
             }
-        }
-    }
-
-    /// 彩色大块状态
-    private func bigStatTile(_ title: String, value: String, icon: String,
-                             tint: Color, filled: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Image(systemName: icon)
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(filled ? .white : tint)
-                .frame(width: 32, height: 32)
-                .background(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(filled ? Color.white.opacity(0.22) : tint.opacity(0.16))
-                )
-            Spacer(minLength: 0)
-            Text(title)
+            Spacer()
+            Text("\(Int(s.double("rsrp"))) dBm")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(filled ? .white : .primary)
-            Text(value)
-                .font(.system(size: 11))
-                .foregroundStyle(filled ? Color.white.opacity(0.85) : Color.secondary)
+                .foregroundStyle(.secondary)
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, minHeight: 104, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(filled
-                      ? AnyShapeStyle(tint.gradient)
-                      : AnyShapeStyle(Color.primary.opacity(0.05)))
-        )
+        .padding(14)
+        .glassCard(radius: 16)
     }
 
-    // MARK: 网络开关
+    /// 开关行（华为同款：图标 + 标题 + 副标题 + 右侧胶囊）
+    private func switchRow(_ title: String, _ subtitle: String, _ node: String,
+                           _ icon: String, _ tint: Color) -> some View {
+        let isOn = localOverride[node] ?? (s[keyFor(node)].lowercased() == "1"
+                 || s[keyFor(node)].lowercased() == "true")
+        let busy = busyNode == node
 
-    private var carrierCard: some View {
-        PanelCard(padding: 16) {
-            VStack(spacing: 2) {
-                PanelTitle(text: "网络开关")
-                    .padding(.bottom, 8)
+        return Button {
+            Haptic.light()
+            pendingToggle = (node, !isOn, title)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(isOn ? tint : .secondary)
+                    .frame(width: 38, height: 38)
+                    .background(Circle().fill((isOn ? tint : Color.secondary).opacity(0.12)))
 
-                SettingRow(icon: "airplane", iconTint: .orange,
-                           title: "飞行模式",
-                           subtitle: "关闭所有无线收发") {
-                    toggleSwitch(CpeNode.netSet + "airplan_on", busyNode)
-                }
-                rowDivider
-                SettingRow(icon: "globe.americas", iconTint: .blue,
-                           title: "数据漫游",
-                           subtitle: "允许漫游网络接入") {
-                    toggleSwitch(CpeNode.netSet + "RoamingEnable", busyNode)
-                }
-                rowDivider
-                SettingRow(icon: "phone.arrow.up.right", iconTint: .green,
-                           title: "VoLTE",
-                           subtitle: "高清语音通话") {
-                    toggleSwitch(CpeNode.netSet + "volte_switch", busyNode)
-                }
-                rowDivider
-                SettingRow(icon: "dot.radiowaves.left.and.right", iconTint: .purple,
-                           title: "载波聚合",
-                           subtitle: "多频段叠加提速") {
-                    toggleSwitch("X_FH_MobileNetwork.NetworkInfo.CaEnable", busyNode)
-                }
-            }
-        }
-    }
-
-    /// 华为：只提供移动数据开关
-    private var huaweiControlCard: some View {
-        PanelCard(padding: 16) {
-            VStack(spacing: 2) {
-                PanelTitle(text: "网络开关")
-                    .padding(.bottom, 8)
-
-                SettingRow(icon: "antenna.radiowaves.left.and.right", iconTint: .blue,
-                           title: "移动数据",
-                           subtitle: "关闭后停止蜂窝上网") {
-                    Toggle("", isOn: Binding(
-                        get: { !(store.status["dataOff"] == "1") },
-                        set: { v in
-                            Haptic.medium()
-                            Task {
-                                do {
-                                    try await HuaweiAPI.shared.setDataSwitch(v)
-                                    store.toast(v ? "移动数据已开启" : "移动数据已关闭",
-                                                kind: .success)
-                                    await store.fetchStatus()
-                                } catch {
-                                    store.toast("设置失败", kind: .error)
-                                }
-                            }
-                        }
-                    ))
-                    .labelsHidden().tint(.green)
-                }
-
-                rowDivider
-
-                HStack(spacing: 6) {
-                    Image(systemName: "info.circle")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.orange)
-                    Text("华为固件暂不支持飞行模式 / VoLTE / 载波聚合切换")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Text(subtitle)
                         .font(.system(size: 11.5))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-                .padding(.vertical, 8)
+
+                Spacer(minLength: 6)
+
+                if busy {
+                    ProgressView().scaleEffect(0.75)
+                } else {
+                    Text(isOn ? "已开启" : "已关闭")
+                        .font(.system(size: 10.5, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(isOn ? tint : Color.secondary.opacity(0.45)))
+                }
             }
+            .padding(14)
+            .glassCard(radius: 18)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
     }
 
-    private var oppoNote: some View {
-        PanelCard(padding: 14) {
-            HStack(spacing: 8) {
-                Image(systemName: "info.circle")
-                    .foregroundStyle(.orange)
-                Text("OPPO 设备暂不支持切换飞行模式与载波聚合")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            }
-        }
+    /// 节点路径 → 状态字段名
+    private func keyFor(_ node: String) -> String {
+        if node.hasSuffix("airplan_on") { return "airplane" }
+        if node.hasSuffix("RoamingEnable") { return "roaming" }
+        if node.hasSuffix("volte_switch") { return "volte" }
+        if node.hasSuffix("CaEnable") { return "ca" }
+        return ""
     }
 
-    // MARK: 快捷操作
-
-    private var actionCard: some View {
-        PanelCard(padding: 16) {
-            VStack(spacing: 2) {
-                PanelTitle(text: "快捷操作")
-                    .padding(.bottom, 8)
-
-                Button {
-                    Haptic.light()
-                    showReboot = true
-                } label: {
-                    SettingRow(icon: "arrow.clockwise.circle", iconTint: .orange,
-                               title: "重启设备",
-                               subtitle: "约 1 分钟恢复") {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.secondary.opacity(0.6))
-                    }
-                }
-                .buttonStyle(.plain)
-
-                rowDivider
-
-                Button {
-                    Haptic.light()
-                    Task {
-                        store.toast("正在刷新…", kind: .info)
-                        await store.fetchAll()
-                        store.toast("数据已更新", kind: .success)
-                    }
-                } label: {
-                    SettingRow(icon: "arrow.triangle.2.circlepath", iconTint: .blue,
-                               title: "刷新数据",
-                               subtitle: "重新读取设备状态") {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.secondary.opacity(0.6))
-                    }
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    private var rebootCard: some View {
-        Button {
-            Haptic.warning()
-            showReboot = true
-        } label: {
+    private var rebootButton: some View {
+        Button { showReboot = true } label: {
             HStack(spacing: 8) {
                 Image(systemName: "power")
                     .font(.system(size: 15, weight: .medium))
                 Text("重启设备")
                     .font(.system(size: 15, weight: .semibold))
             }
-            .foregroundStyle(Color(red: 0.95, green: 0.42, blue: 0.38))
+            .foregroundStyle(Color(red: 0.9, green: 0.3, blue: 0.3))
             .frame(maxWidth: .infinity)
             .frame(height: 52)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color(red: 0.95, green: 0.42, blue: 0.38).opacity(0.12))
-            )
+            .glassCard(radius: 16)
         }
         .buttonStyle(.plain)
-    }
-
-    private var rowDivider: some View {
-        Rectangle()
-            .fill(Color.primary.opacity(0.06))
-            .frame(height: 1)
-            .padding(.leading, 44)
-    }
-
-    // MARK: 逻辑
-
-    private func isOn(_ key: String) -> Bool {
-        let raw = store.status[key].lowercased()
-        return raw == "1" || raw == "true" || raw == "on"
-    }
-
-    private func toggleSwitch(_ node: String, _ busy: String?) -> some View {
-        let on = localOverride[node] ?? isOn(node)
-        return Toggle("", isOn: Binding(
-            get: { on },
-            set: { newValue in
-                Haptic.selection()
-                pendingToggle = (node, newValue, nodeTitle(node))
-            }
-        ))
-        .labelsHidden()
-        .tint(.green)
-        .disabled(busyNode == node)
-    }
-
-    private func nodeTitle(_ node: String) -> String {
-        if node.contains("airplan") { return "飞行模式" }
-        if node.contains("Roaming") { return "数据漫游" }
-        if node.contains("volte") { return "VoLTE" }
-        if node.contains("CaEnable") { return "载波聚合" }
-        return "该功能"
+        .haptic(.warning)
     }
 
     private func applyToggle() {
@@ -345,6 +196,8 @@ struct ControlView: View {
 struct ParamView: View {
     @EnvironmentObject var store: CpeStore
     @State private var masked = true
+    /// 单独点开的字段
+    @State private var revealed: Set<String> = []
 
     private var s: CpeStatus { store.status }
 
@@ -352,204 +205,154 @@ struct ParamView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 12) {
-                    deviceHeader
-                    cellCard
-                    simCard
-                    wanCard
-                    firmwareCard
+                    // 概览卡：型号 + 温度
+                    overviewCard
+
+                    // 3 组两列信息
+                    infoCard("CPE 信息", icon: "cpu", rows: [
+                        ("序列号", s["sn"], true),
+                        ("厂商", s["vendor"], false),
+                        ("软件版本", s["swver"], false),
+                        ("硬件版本", s["hwver"], false),
+                        ("工作模式", s["workmode"], false),
+                        ("模组版本", s["modem"], false)
+                    ])
+
+                    infoCard("网络", icon: "wifi", rows: [
+                        ("WAN IP", s["wanIP"], false),
+                        ("LAN IP", s["lanIP"], false),
+                        ("2.4G SSID", s["ssid24"], false),
+                        ("5G SSID", s["ssid5g"], false),
+                        ("在线设备", s["online"] + " 台", false),
+                        ("连接状态", s["wanStatus"] == "Connected" ? "已连接" : s["wanStatus"], false)
+                    ])
+
+                    infoCard("SIM 卡", icon: "simcard", rows: [
+                        ("运营商", s.carrierName, false),
+                        ("本机号码", s["phone"], true),
+                        ("IMSI", s["imsi"], true),
+                        ("ICCID", s["iccid"], true),
+                        ("IMEI", s["imei"], true),
+                        ("注册状态", s["regstatus"] == "0" ? "已注册" : "未注册", false)
+                    ])
+
+                    Text("点星号可单独查看该项")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary.opacity(0.7))
+                        .frame(maxWidth: .infinity, alignment: .center)
                 }
                 .padding(.horizontal, 14)
                 .padding(.top, 8)
-                .padding(.bottom, 28)
+                .padding(.bottom, 102)
             }
-            .background(AppBackground())
+            .scrollContentBackground(.hidden)
+            .background(GlassListBackground())
             .navigationTitle("参数")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        Haptic.selection()
+                        Haptic.light()
                         masked.toggle()
+                        if !masked { revealed.removeAll() }
                     } label: {
-                        Image(systemName: masked ? "eye.slash" : "eye")
+                        HStack(spacing: 3) {
+                            Image(systemName: masked ? "eye.slash" : "eye")
+                                .font(.system(size: 12))
+                            Text(masked ? "一键显示" : "全部隐藏")
+                                .font(.system(size: 12))
+                        }
                     }
                 }
             }
         }
     }
 
-    // MARK: 设备头卡
-
-    private var deviceHeader: some View {
-        PanelCard(padding: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 5) {
-                    Image(systemName: "wifi.router")
-                        .font(.system(size: 10))
-                    Text("设备 · " + (s.isOnline ? "在线" : "离线"))
-                        .font(.system(size: 11.5, weight: .medium))
-                }
-                .foregroundStyle(s.isOnline ? Color.green : Color.secondary)
-
-                Text(s.deviceModel)
-                    .font(.system(size: 30, weight: .bold, design: .rounded))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-
-                Text("已连接 · " + uptimeLine(s.int("uptime")))
-                    .font(.system(size: 12.5))
+    private var overviewCard: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("设备型号")
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+                Text(s.deviceModel)
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
             }
-        }
-    }
-
-    private func uptimeLine(_ t: Int) -> String {
-        guard t > 0 else { return "--" }
-        let d = t / 86400, h = (t % 86400) / 3600, m = (t % 3600) / 60
-        if d > 0 { return "已在线 \(d) 天 \(h) 小时" }
-        if h > 0 { return "已在线 \(h) 小时 \(m) 分" }
-        return "已在线 \(m) 分钟"
-    }
-
-    // MARK: 蜂窝网络
-
-    private var cellCard: some View {
-        PanelCard(padding: 16) {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("蜂窝网络")
-                    .font(.system(size: 15, weight: .bold))
-                    .padding(.bottom, 2)
-
-                kvRow("Band", bandText)
-                divider
-                kvRow("PLMN", s["plmn"].isEmpty ? s.carrierName : s["plmn"])
-                divider
-                kvRow("PCI", s["pci"].isEmpty ? "--" : s["pci"])
-                divider
-                kvRow("NRARFCN", s["arfcn"].isEmpty ? "--" : s["arfcn"])
-                divider
-                kvRow("网络制式", s["netmode"] == "3" ? "5G SA" : "4G")
-            }
-        }
-    }
-
-    private var bandText: String {
-        let b = s["band"].isEmpty ? "--" : "n" + s["band"]
-        let w = s["bw"].isEmpty ? "" : s["bw"]
-        let a = s["arfcn"].isEmpty ? "" : "@" + s["arfcn"]
-        return (b + " " + w + a).trimmingCharacters(in: .whitespaces)
-    }
-
-    // MARK: SIM
-
-    private var simCard: some View {
-        PanelCard(padding: 16) {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("SIM 与身份")
-                    .font(.system(size: 15, weight: .bold))
-                    .padding(.bottom, 2)
-
-                kvRow("序列号", mask(s["sn"]))
-                divider
-                kvRow("IMEI", mask(s["imei"]))
-                divider
-                kvRow("IMSI", mask(s["imsi"]))
-                divider
-                kvRow("ICCID", mask(s["iccid"]))
-                divider
-                kvRow("本机号码", mask(s["phone"]))
-            }
-        }
-    }
-
-    private func mask(_ v: String) -> String {
-        if v.isEmpty || v == "-" { return "--" }
-        if !masked { return v }
-        guard v.count > 6 else { return String(repeating: "•", count: v.count) }
-        let head = v.prefix(3)
-        let tail = v.suffix(3)
-        return "\(head)\(String(repeating: "•", count: max(3, v.count - 6)))\(tail)"
-    }
-
-    // MARK: WAN
-
-    private var wanCard: some View {
-        PanelCard(padding: 16) {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("WAN 与地址")
-                    .font(.system(size: 15, weight: .bold))
-                    .padding(.bottom, 2)
-
-                kvRow("LAN IP", s["lanIP"].isEmpty ? "--" : s["lanIP"], copyable: true)
-                divider
-                kvRow("WAN IPv4", s["wanIP"].isEmpty ? "--" : s["wanIP"], copyable: true)
-                divider
-                kvRow("2.4G SSID", s["ssid24"].isEmpty ? "--" : s["ssid24"])
-                divider
-                kvRow("5G SSID", s["ssid5g"].isEmpty ? "--" : s["ssid5g"])
-            }
-        }
-    }
-
-    // MARK: 固件
-
-    private var firmwareCard: some View {
-        PanelCard(padding: 16) {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("固件与档案")
-                    .font(.system(size: 15, weight: .bold))
-                    .padding(.bottom, 2)
-
-                kvRow("软件版本", s["swver"].isEmpty ? "--" : s["swver"])
-                divider
-                kvRow("硬件版本", s["hwver"].isEmpty ? "--" : s["hwver"])
-                divider
-                kvRow("模组版本", s["modem"].isEmpty ? "--" : s["modem"])
-                divider
-                kvRow("厂商", s["vendor"].isEmpty ? "--" : s["vendor"])
-                if let t = s.temperature {
-                    divider
-                    kvRow("模组温度", String(format: "%.1f °C", t))
-                }
-            }
-        }
-    }
-
-    // MARK: 组件
-
-    private var divider: some View {
-        Rectangle()
-            .fill(Color.primary.opacity(0.06))
-            .frame(height: 1)
-    }
-
-    private func kvRow(_ k: String, _ v: String, copyable: Bool = false) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Text(k)
-                .font(.system(size: 12.5))
-                .foregroundStyle(.secondary)
-                .frame(width: 92, alignment: .leading)
-            Text(v)
-                .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(.primary)
-                .textSelection(.enabled)
-                .multilineTextAlignment(.trailing)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-            if copyable && v != "--" {
-                Button {
-                    Haptic.light()
-                    UIPasteboard.general.string = v
-                    store.toast("已复制", kind: .success)
-                } label: {
-                    Image(systemName: "doc.on.doc")
+            Spacer()
+            if let t = s.temperature {
+                VStack(alignment: .trailing, spacing: 3) {
+                    Text("模组温度")
                         .font(.system(size: 11))
-                        .foregroundStyle(.secondary.opacity(0.7))
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 3) {
+                        Image(systemName: "thermometer.medium")
+                            .font(.system(size: 13))
+                        Text(String(format: "%.1f°C", t))
+                            .font(.system(size: 19, weight: .bold))
+                    }
+                    .foregroundStyle(t >= 50 ? .red : (t >= 42 ? .orange : .green))
                 }
-                .buttonStyle(.plain)
             }
         }
-        .padding(.vertical, 3)
+        .padding(16)
+        .glassCard(radius: 20, strong: true)
+    }
+
+    /// 三列网格信息卡（更紧凑，无需长列表滚动）
+    private func infoCard(_ title: String, icon: String,
+                          rows: [(String, String, Bool)]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 7) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.blue)
+                    .frame(width: 24, height: 24)
+                    .background(Circle().fill(Color.blue.opacity(0.12)))
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+            }
+
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8),
+                                GridItem(.flexible(), spacing: 8)],
+                      alignment: .leading, spacing: 9) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, r in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(r.0)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+
+                        if r.2 && masked && !revealed.contains(r.0) {
+                            // 敏感项：点一下单独显示
+                            Button {
+                                Haptic.light()
+                                _ = revealed.insert(r.0)
+                            } label: {
+                                HStack(spacing: 3) {
+                                    Text("••••••••")
+                                        .font(.system(size: 12.5, weight: .medium))
+                                    Text("显示")
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(.blue.opacity(0.8))
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                            Text(r.1.isEmpty || r.1 == "-" ? "--" : r.1)
+                                .font(.system(size: 12.5, weight: .medium))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.75)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .padding(14)
+        .glassCard(radius: 18)
     }
 }
+
+// MARK: - 型号浮层
 
 struct ModelSheet: View {
     let status: CpeStatus
@@ -591,345 +394,158 @@ struct ModelSheet: View {
 struct SettingsView: View {
     @EnvironmentObject var store: CpeStore
     @State private var showConn = false
-    @State private var showSwitcher = false
-    @State private var confirmLogout = false
     @AppStorage("appTheme") private var theme = "system"
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 12) {
-                    deviceCard
-                    accountCard
-                    appearanceCard
-                    refreshCard
-                    displayCard
-                    diagCard
-                    dangerCard
-                    versionFooter
-                }
-                .padding(.horizontal, 14)
-                .padding(.top, 8)
-                .padding(.bottom, 28)
-            }
-            .background(AppBackground())
-            .navigationTitle("设置")
-            .sheet(isPresented: $showConn) {
-                ConnEditor().environmentObject(store)
-            }
-            .sheet(isPresented: $showSwitcher) {
-                DeviceSwitcher().environmentObject(store)
-            }
-            .alert("退出登录", isPresented: $confirmLogout) {
-                Button("取消", role: .cancel) { }
-                Button("退出", role: .destructive) {
-                    Haptic.warning()
-                    store.isLoggedIn = false
-                    store.stopPolling()
-                    store.toast("已退出登录", kind: .info)
-                }
-            } message: {
-                Text("密码会保留在本机，下次可自动登录。")
-            }
-        }
-    }
-
-    // MARK: 设备
-
-    private var deviceCard: some View {
-        PanelCard(padding: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 5) {
-                    Image(systemName: "wifi.router")
-                        .font(.system(size: 10))
-                    Text("后台连接")
-                        .font(.system(size: 11.5, weight: .medium))
-                }
-                .foregroundStyle(.blue)
-
-                HStack(alignment: .center, spacing: 8) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(store.activeProfile?.displayTitle ?? "未连接")
-                            .font(.system(size: 24, weight: .bold, design: .rounded))
-                        Text(Settings.load().host + " · " + Settings.load().user)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Circle()
-                        .fill(store.isLoggedIn ? Color.green : Color.red)
-                        .frame(width: 9, height: 9)
-                }
-                .padding(.top, 2)
-
-                HStack(spacing: 10) {
-                    smallBtn("连接设置", "antenna.radiowaves.left.and.right") {
-                        showConn = true
-                    }
-                    smallBtn("切换设备", "arrow.left.arrow.right") {
-                        showSwitcher = true
-                    }
-                }
-                .padding(.top, 6)
-            }
-        }
-    }
-
-    private func smallBtn(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
-        Button {
-            Haptic.light()
-            action()
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: icon).font(.system(size: 11))
-                Text(title).font(.system(size: 12.5, weight: .medium))
-            }
-            .foregroundStyle(.blue)
-            .frame(maxWidth: .infinity)
-            .frame(height: 38)
-            .background(
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .fill(Color.blue.opacity(0.10))
-            )
-        }
-        .buttonStyle(.plain)
-    }
-
-    // MARK: 账号
-
-    private var accountCard: some View {
-        PanelCard(padding: 16) {
-            VStack(spacing: 2) {
-                PanelTitle(text: "账号与安全")
-                    .padding(.bottom, 8)
-
-                SettingRow(icon: "key", iconTint: .blue,
-                           title: "保存密码",
-                           subtitle: "密码存在系统钥匙串") {
-                    Toggle("", isOn: Binding(
-                        get: { UserDefaults.standard.object(forKey: "rememberPass") as? Bool ?? true },
-                        set: { v in
-                            UserDefaults.standard.set(v, forKey: "rememberPass")
-                            Haptic.medium()
+            List {
+                // ── 连接状态 ──
+                Section {
+                    HStack(spacing: 11) {
+                        Circle()
+                            .fill(store.isLoggedIn ? Color.green : Color.red)
+                            .frame(width: 9, height: 9)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(store.isLoggedIn ? "已连接" : "未连接")
+                                .font(.system(size: 15, weight: .semibold))
+                            Text(connSubtitle)
+                                .font(.system(size: 12)).foregroundStyle(.secondary)
                         }
-                    ))
-                    .labelsHidden().tint(.green)
-                }
-                rowDivider
-                SettingRow(icon: "bolt.badge.clock", iconTint: .green,
-                           title: "自动登录",
-                           subtitle: "打开 App 时自动连接设备") {
-                    Toggle("", isOn: Binding(
-                        get: { UserDefaults.standard.object(forKey: "autoLogin") as? Bool ?? true },
-                        set: { v in
-                            UserDefaults.standard.set(v, forKey: "autoLogin")
-                            Haptic.medium()
+                        Spacer()
+                        Button("编辑") {
+                            Haptic.light()
+                            showConn = true
                         }
-                    ))
-                    .labelsHidden().tint(.green)
-                }
-                rowDivider
-
-                Button {
-                    Haptic.warning()
-                    confirmLogout = true
-                } label: {
-                    SettingRow(icon: "rectangle.portrait.and.arrow.right",
-                               iconTint: Color(red: 0.95, green: 0.42, blue: 0.38),
-                               title: "退出登录",
-                               subtitle: "保留本机密码") {
-                        EmptyView()
+                            .font(.system(size: 13, weight: .medium))
                     }
+                    .padding(.vertical, 2)
                 }
-                .buttonStyle(.plain)
-            }
-        }
-    }
 
-    // MARK: 外观
-
-    private var appearanceCard: some View {
-        PanelCard(padding: 16) {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("外观")
-                    .font(.system(size: 15, weight: .bold))
-                Text("跟随系统或固定深浅色")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-
-                HStack(spacing: 0) {
-                    themeItem("浅色", "light")
-                    themeItem("深色", "dark")
-                    themeItem("跟随系统", "system")
-                }
-                .padding(4)
-                .background(
-                    RoundedRectangle(cornerRadius: 13, style: .continuous)
-                        .fill(Color.primary.opacity(0.05))
-                )
-                .padding(.top, 2)
-            }
-        }
-    }
-
-    private func themeItem(_ title: String, _ value: String) -> some View {
-        Button {
-            Haptic.selection()
-            theme = value
-            applyAppearance(value)
-        } label: {
-            Text(title)
-                .font(.system(size: 13, weight: theme == value ? .semibold : .regular))
-                .foregroundStyle(theme == value ? Color.primary : Color.secondary)
-                .frame(maxWidth: .infinity)
-                .frame(height: 36)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(theme == value ? Color.blue.opacity(0.18) : Color.clear)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(theme == value ? Color.blue.opacity(0.5) : Color.clear,
-                                      lineWidth: 1)
-                )
-        }
-        .buttonStyle(.plain)
-    }
-
-    // MARK: 刷新
-
-    private var refreshCard: some View {
-        PanelCard(padding: 16) {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("数据刷新")
-                    .font(.system(size: 15, weight: .bold))
-
-                HStack(spacing: 0) {
-                    ForEach([0.5, 1.0, 1.5, 2.0, 3.0, 5.0], id: \.self) { v in
-                        Button {
-                            Haptic.selection()
-                            store.refreshInterval = v
-                            store.startPolling()
-                        } label: {
-                            Text(v == 0.5 ? "0.5s" : "\(Int(v))s")
-                                .font(.system(size: 12.5,
-                                              weight: store.refreshInterval == v ? .semibold : .regular))
-                                .foregroundStyle(store.refreshInterval == v
-                                                 ? Color.primary : Color.secondary)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 34)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                        .fill(store.refreshInterval == v
-                                              ? Color.primary.opacity(0.08) : Color.clear)
-                                )
-                        }
-                        .buttonStyle(.plain)
+                // ── 外观 ──
+                Section {
+                    Picker("主题", selection: $theme) {
+                        Text("跟随系统").tag("system")
+                        Text("浅色").tag("light")
+                        Text("深色").tag("dark")
                     }
+                    .pickerStyle(.segmented)
+                    .onChange(of: theme) { newValue in
+                        applyAppearance(newValue)
+                    }
+                } header: {
+                    Text("外观")
                 }
-                .padding(4)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.primary.opacity(0.05))
-                )
-            }
-        }
-    }
 
-    // MARK: 显示
+                // ── 刷新频率 ──
+                Section {
+                    Picker("刷新间隔", selection: Binding(
+                        get: { store.refreshInterval },
+                        set: { store.refreshInterval = $0; store.startPolling() }
+                    )) {
+                        Text("0.5s").tag(0.5)
+                        Text("1s").tag(1.0)
+                        Text("1.5s").tag(1.5)
+                        Text("2s").tag(2.0)
+                        Text("3s").tag(3.0)
+                        Text("5s").tag(5.0)
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text("数据刷新")
+                }
 
-    private var displayCard: some View {
-        PanelCard(padding: 16) {
-            VStack(spacing: 2) {
-                PanelTitle(text: "显示与诊断")
-                    .padding(.bottom, 8)
-
-                SettingRow(icon: "sun.max", iconTint: .orange,
-                           title: "屏幕常亮",
-                           subtitle: "分屏挂机时保持刷新") {
-                    Toggle("", isOn: Binding(
+                // ── 显示 ──
+                Section {
+                    Toggle(isOn: Binding(
                         get: { UserDefaults.standard.bool(forKey: "keepAwake") },
                         set: { v in
                             UserDefaults.standard.set(v, forKey: "keepAwake")
                             UIApplication.shared.isIdleTimerDisabled = v
                             Haptic.medium()
+                            store.toast(v ? "屏幕保持常亮" : "已恢复自动锁屏", kind: .info)
                         }
-                    ))
-                    .labelsHidden().tint(.green)
-                }
-            }
-        }
-    }
-
-    private var diagCard: some View {
-        PanelCard(padding: 16) {
-            NavigationLink {
-                DiagView().environmentObject(store)
-            } label: {
-                SettingRow(icon: "stethoscope", iconTint: .purple,
-                           title: "连接诊断",
-                           subtitle: "检测登录与数据读取") {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.secondary.opacity(0.6))
-                }
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    // MARK: 危险操作
-
-    private var dangerCard: some View {
-        PanelCard(padding: 16) {
-            VStack(spacing: 2) {
-                PanelTitle(text: "设备维护")
-                    .padding(.bottom, 8)
-
-                Button {
-                    Haptic.warning()
-                    Task {
-                        let ok = await store.reboot()
-                        store.toast(ok ? "重启指令已发送" : "重启失败",
-                                    kind: ok ? .success : .error)
+                    )) {
+                        Label("屏幕常亮", systemImage: "sun.max")
                     }
-                } label: {
-                    SettingRow(icon: "arrow.clockwise.circle", iconTint: .orange,
-                               title: "重启设备",
-                               subtitle: "约 1 分钟恢复") {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.secondary.opacity(0.6))
+                } header: {
+                    Text("显示")
+                } footer: {
+                    Text("分屏挂机看流量时建议开启，否则系统会自动锁屏暂停刷新。")
+                }
+
+                // ── 通知（所有设备）──
+                NotifySection()
+
+                // ── 设备维护（按厂商）──
+                if store.isHuawei {
+                    HuaweiSettingsSection()
+                }
+                if store.isFiberHome {
+                    FiberExtrasSection()
+                }
+
+                // ── 连接诊断 ──
+                Section {
+                    NavigationLink {
+                        DiagView()
+                            .environmentObject(store)
+                    } label: {
+                        Label("连接诊断", systemImage: "stethoscope")
                     }
                 }
-                .buttonStyle(.plain)
+
+                // ── 关于 ──
+                Section {
+                    HStack {
+                        Text("版本")
+                        Spacer()
+                        Text(appVersion)
+                            .foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Text("设备")
+                        Spacer()
+                        Text(store.status.deviceModel)
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("关于")
+                }
+
+                // ── 退出 ──
+                Section {
+                    Button("退出登录", role: .destructive) {
+                        Haptic.warning()
+                        // 只退出会话，保留已记住的密码，下次免输入
+                        store.isLoggedIn = false
+                        store.stopPolling()
+                    }
+                }
             }
+            .glassListStyle()
+            .navigationTitle("设置")
+            .sheet(isPresented: $showConn) {
+                ConnEditor()
+                    .environmentObject(store)
+            }
+            .onAppear { applyAppearance(theme) }
         }
     }
 
-    private var versionFooter: some View {
-        VStack(spacing: 4) {
-            Text("CPE 管理 v" + appVersion)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary.opacity(0.7))
-            Text(store.isOppo ? "OPPO CPE" : "烽火 CPE")
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary.opacity(0.5))
+    /// 当前连接的设备信息
+    /// 连接信息：优先用当前设备档案
+    private var connSubtitle: String {
+        if let p = store.activeProfile {
+            return p.host + " · " + p.user
         }
-        .padding(.top, 6)
-    }
-
-    private var rowDivider: some View {
-        Rectangle()
-            .fill(Color.primary.opacity(0.06))
-            .frame(height: 1)
-            .padding(.leading, 44)
+        let cfg = Settings.load()
+        return cfg.host + " · " + cfg.user
     }
 
     private var appVersion: String {
-        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
         let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
-        return "\(v) (\(b))"
+        return "v\(v) (\(b))"
     }
 
     private func applyAppearance(_ mode: String) {
@@ -1021,6 +637,38 @@ struct DiagView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
+                // 自动扫描
+                Button {
+                    Task {
+                        running = true
+                        lines = ["正在扫描局域网…"]
+                        let results = await CpeDetector.detect()
+                        lines = []
+                        if results.isEmpty {
+                            lines.append("✗ 未发现可识别的 CPE")
+                        } else {
+                            for r in results {
+                                lines.append("✓ \(r.vendor.displayName) · \(r.host) · \(r.evidence)")
+                            }
+                            vendor = results[0].vendor
+                            host = results[0].host
+                            user = results[0].vendor.defaultUser
+                        }
+                        running = false
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        if running { ProgressView().scaleEffect(0.7) }
+                        Text(running ? "扫描中…" : "扫描局域网设备").font(.system(size: 13))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 38)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(Color.blue.opacity(0.1)))
+                    .foregroundStyle(.blue)
+                }
+                .buttonStyle(.plain)
+                .disabled(running)
+
                 // 厂商选择
                 Picker("厂商", selection: $vendor) {
                     ForEach(CpeVendor.allCases, id: \.self) { v in
@@ -1154,6 +802,16 @@ struct DiagView: View {
 
     private func runOppo(host: String, user: String, pass: String) async {
         lines.append("方式: WebView 桥接")
+        lines.append("")
+
+        // 第一步：JS 引擎自检
+        let js = await OppoBridge.shared.selfTest()
+        lines.append(js)
+        if js.hasPrefix("X") {
+            lines.append("")
+            lines.append("JS 引擎不可用，WebView 方案无法工作")
+            return
+        }
         lines.append("")
 
         let ok = await OppoBridge.shared.login(host: host, user: user, password: pass)
