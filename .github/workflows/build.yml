@@ -4,78 +4,62 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "版本号（如 1.1.2）"
+        description: "版本号（如 1.3.0）"
         required: false
-        default: "1.1.2"
-  # 推送不再自动构建：本项目的推送脚本逐文件提交，会触发大量重复任务
+        default: "1.3.0"
 
 jobs:
   build:
-    # 同时向 3 种 macOS 镜像派发，谁先拿到机器就用谁的结果
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-26, macos-15, macos-14]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    runs-on: macos-15
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: List available Xcode
-        run: ls -d /Applications/Xcode*.app 2>/dev/null || echo "none"
-
-      - name: Show Xcode
+      - name: Select Xcode
         run: |
+          LATEST=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$LATEST" ]; then sudo xcode-select -s "$LATEST"; fi
           xcodebuild -version
-          ls -d /Applications/Xcode*.app 2>/dev/null || true
 
       - name: Install XcodeGen
         run: brew install xcodegen
 
       - name: Resolve version
-        id: ver
         run: |
           VER="${{ inputs.version }}"
-          if [ -z "$VER" ]; then VER="${GITHUB_REF_NAME#v}"; fi
-          if ! [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then VER="1.1.2"; fi
+          if [ -z "$VER" ]; then VER="1.3.0"; fi
+          if ! [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then VER="1.3.0"; fi
           BUILD=$(date +%m%d%H)
           echo "VER=$VER" >> $GITHUB_ENV
           echo "BUILD=$BUILD" >> $GITHUB_ENV
           echo "version=$VER build=$BUILD"
 
+      - name: Clean stray files
+        run: |
+          find . -name "*.swift.new" -o -name "*.swift.bak" -o -name "*.swift.orig" | xargs -r rm -v
+          find . -name "*~" -delete
+
       - name: Generate Xcode project
         run: |
           xcodegen generate
-          echo "--- 生成结果 ---"
           ls -d *.xcodeproj
           OBJ=$(grep -m1 "objectVersion" *.xcodeproj/project.pbxproj | grep -oE "[0-9]+" | head -1)
           echo "objectVersion = $OBJ"
-          # Xcode 15 最高支持 60；若生成的是 70+ 则降级
           if [ -n "$OBJ" ] && [ "$OBJ" -gt 60 ]; then
-            echo "工程格式过新（$OBJ），降级为 60"
             sed -i '' "s/objectVersion = $OBJ;/objectVersion = 60;/" *.xcodeproj/project.pbxproj
-            grep -m1 "objectVersion" *.xcodeproj/project.pbxproj
           fi
 
-      - name: Apply version to project
+      - name: Apply version
         run: |
-          echo "应用版本 $VER ($BUILD)"
-          # 1. Info.plist 硬编码
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VER" FHCPEManager/Resources/Info.plist || \
-          /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $VER" FHCPEManager/Resources/Info.plist
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" FHCPEManager/Resources/Info.plist || \
-          /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $BUILD" FHCPEManager/Resources/Info.plist
-          # 2. 工程构建设置（覆盖 XcodeGen 生成的值）
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VER" FHCPEManager/Resources/Info.plist || true
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" FHCPEManager/Resources/Info.plist || true
           sed -i '' -E "s/MARKETING_VERSION = [^;]+;/MARKETING_VERSION = $VER;/g" FHCPEManager.xcodeproj/project.pbxproj
           sed -i '' -E "s/CURRENT_PROJECT_VERSION = [^;]+;/CURRENT_PROJECT_VERSION = $BUILD;/g" FHCPEManager.xcodeproj/project.pbxproj
-          echo "--- 校验 ---"
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" FHCPEManager/Resources/Info.plist
-          /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" FHCPEManager/Resources/Info.plist
-          grep -m2 "MARKETING_VERSION" FHCPEManager.xcodeproj/project.pbxproj
 
-      - name: Build (unsigned)
+      - name: Build
         run: |
           xcodebuild \
             -project FHCPEManager.xcodeproj \
@@ -89,25 +73,22 @@ jobs:
             DEVELOPMENT_TEAM="" \
             -arch arm64 \
             COMPILER_INDEX_STORE_ENABLE=NO \
-            DEBUG_INFORMATION_FORMAT=dwarf \
-            build
+            build 2>&1 | tee /tmp/build.log | tail -50
+          exit ${PIPESTATUS[0]}
 
-      - name: Package into IPA
+      - name: Package
         run: |
           APP_PATH="build/Build/Products/Release-iphoneos/FHCPEManager.app"
-          if [ ! -d "$APP_PATH" ]; then
-            echo "构建产物不存在"; ls -R build/Build/Products || true; exit 1
-          fi
+          if [ ! -d "$APP_PATH" ]; then ls -R build/Build/Products; exit 1; fi
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/
-          # 未签名包移除签名文件
           rm -rf Payload/FHCPEManager.app/_CodeSignature || true
           zip -qry FHCPE-Manager-unsigned.ipa Payload
           ls -lh FHCPE-Manager-unsigned.ipa
 
-      - name: Upload IPA
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: IPA-${{ matrix.os }}
+          name: CPE-Manager-ipa
           path: FHCPE-Manager-unsigned.ipa
           retention-days: 30
