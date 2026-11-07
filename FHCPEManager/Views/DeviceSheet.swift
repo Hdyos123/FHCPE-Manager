@@ -39,8 +39,8 @@ struct DeviceSheet: View {
                         Button {
                             beginEdit(h)
                         } label: {
-                            Image(systemName: "slider.horizontal.3")
-                                .font(.system(size: 14))
+                            Image(systemName: "pencil")
+                                .font(.system(size: 13, weight: .medium))
                                 .foregroundStyle(.secondary)
                                 .frame(width: 32, height: 32)
                                 .background(RoundedRectangle(cornerRadius: 9)
