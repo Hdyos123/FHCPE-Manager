@@ -30,6 +30,9 @@ final class HuaweiBridge: NSObject, ObservableObject {
         if trace.count > 80 { trace.removeFirst() }
     }
 
+    /// 清空日志（每次新登录前调用）
+    func clearTrace() { trace.removeAll() }
+
     private var callbacks: [String: (Any?) -> Void] = [:]
     private var seq = 0
 
@@ -361,6 +364,7 @@ final class HuaweiBridge: NSObject, ObservableObject {
             wv.leadingAnchor.constraint(equalTo: view.leadingAnchor)
         ])
         webView = wv
+        log("WebView 已创建")
     }
 
     // MARK: 登录
@@ -375,9 +379,11 @@ final class HuaweiBridge: NSObject, ObservableObject {
         log("开始加载 \(host)")
 
         guard let wv = webView else {
-            lastError = "WebView 未初始化"
+            lastError = "WebView 未挂载（HuaweiHost 没加进视图）"
+            log("✗ WebView 未初始化 — 检查 FHCPEManagerApp 里有没有 HuaweiHost()")
             return false
         }
+        log("WebView 已就绪")
         guard let url = URL(string: "http://\(host)/") else {
             lastError = "地址无效"
             return false
@@ -393,7 +399,7 @@ final class HuaweiBridge: NSObject, ObservableObject {
             try? await Task.sleep(nanoseconds: 300_000_000)
             waited += 0.3
         }
-        log(pageLoaded ? "didFinish \(Int(waited))s" : "✗ didFinish 超时")
+        log(pageLoaded ? "① 页面加载完成 \(Int(waited))s" : "① ✗ 页面加载超时 25s")
 
         // 等 Vue 渲染出登录框
         var ok = false
@@ -411,20 +417,26 @@ final class HuaweiBridge: NSObject, ObservableObject {
                let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
                let n = o["inputs"] as? Int, n >= 2 {
                 ok = true
-                log("页面就绪 (\(i/2)s)")
+                log("② 登录框就绪 \(i/2)s · hash=\(o["hash"] ?? "?")")
                 break
+            }
+            if i % 10 == 0 {
+                log("  等待登录框 \(i/2)s · inputs=\(st.flatMap { ($0 as? String).map { s in
+                    (try? JSONSerialization.jsonObject(with: Data(s.utf8))) as? [String: Any]
+                } ?? nil }?["inputs"] ?? "?")")
             }
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
         guard ok else {
-            lastError = "页面未渲染登录框"
+            lastError = "页面未渲染登录框（20 秒超时）"
+            log("② ✗ 20 秒内未找到登录框")
             return false
         }
 
         // 如果已经在登录后页面，跳过登录
         if await isLoggedIn() {
             ready = true
-            log("已有会话，直接使用")
+            log("② 已有会话，跳过登录")
             return true
         }
 
@@ -483,7 +495,7 @@ final class HuaweiBridge: NSObject, ObservableObject {
         """
         let r = await jsCall(body, timeout: 18)
         let hash = (r as? String) ?? ""
-        log("登录后 hash: \(hash)")
+        log("③ 点击登录后 hash=\(hash)")
 
         if hash.hasPrefix("ERR") {
             lastError = "页面异常：\(hash)"
@@ -495,20 +507,28 @@ final class HuaweiBridge: NSObject, ObservableObject {
         }
 
         // 等页面跳转完成
+        var lastProbe = ""
         for i in 0..<20 {
-            if await isLoggedIn() {
-                // 再用探针确认有权限
+            let logged = await isLoggedIn()
+            if logged {
                 let probe = await get("monitoringStatus")
-                if probe["__err"] == nil && !probe.isEmpty {
+                if let err = probe["__err"] as? String {
+                    lastProbe = err
+                    log("④ 探针失败 code=\(err) (\(i)/2s)")
+                } else if !probe.isEmpty {
                     ready = true
-                    log("✓ 登录成功 (\(i)/2 秒)")
+                    log("④ 探针通过 · ✓ 登录成功")
                     return true
                 }
+            } else if i % 4 == 0 {
+                log("④ 等待跳转 \(i/2)s · hash=\(hash)")
             }
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
 
-        lastError = "登录失败：页面未就绪（hash=\(hash)）"
+        lastError = "登录失败：hash=\(hash)"
+            + (lastProbe.isEmpty ? "" : " 探针=\(lastProbe)")
+        log("④ ✗ 登录未完成 · hash=\(hash) · 探针=\(lastProbe)")
         return false
     }
 
@@ -543,7 +563,15 @@ final class HuaweiBridge: NSObject, ObservableObject {
               let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
             return [:]
         }
-        if let e = o["__err"] as? String { return ["__err": e] }
+        if let e = o["__err"] as? String {
+            log("   接口 \(alias) → \(e)")
+            return ["__err": e]
+        }
+        if let e = o["error"] as? [String: Any] {
+            let c = e["code"] ?? "?"
+            log("   接口 \(alias) → error \(c)")
+            return ["__err": "\(c)"]
+        }
         return o
     }
 
