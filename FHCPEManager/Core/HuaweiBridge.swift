@@ -385,10 +385,6 @@ final class HuaweiBridge: NSObject, ObservableObject {
         }
         log("WebView 已就绪")
 
-        // 检查桥接函数是否注入成功（关键诊断）
-        let bridgeType = (await evalSync("typeof window.__hwCall")) as? String
-        let bt = bridgeType ?? "nil"
-        log("桥接函数: " + bt)
         guard let url = URL(string: "http://\(host)/") else {
             lastError = "地址无效"
             return false
@@ -405,6 +401,12 @@ final class HuaweiBridge: NSObject, ObservableObject {
             waited += 0.3
         }
         log(pageLoaded ? "① 页面加载完成 \(Int(waited))s" : "① ✗ 页面加载超时 25s")
+
+        // 页面加载后检查桥接函数是否注入成功
+        let bridgeType = (await evalSync("typeof window.__hwCall")) as? String
+        log("① 桥接函数: " + (bridgeType ?? "nil"))
+        let docReady = (await evalSync("document.readyState")) as? String
+        log("① 文档状态: " + (docReady ?? "nil"))
 
         // 等 Vue 渲染出登录框
         var ok = false
