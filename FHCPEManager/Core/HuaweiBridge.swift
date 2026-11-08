@@ -431,18 +431,23 @@ final class HuaweiBridge: NSObject, ObservableObject {
         return await doLogin()
     }
 
-    /// 判断页面是否已登录（能取到 $request）
+    /// 判断页面是否已登录
+    ///
+    /// 注意：$request 在登录页也存在，不能作为判据。
+    /// 正确标准：hash 不是 login，且输入框 ≤ 1 个。
     private func isLoggedIn() async -> Bool {
         let r = await jsCall("""
         function(){
           try {
+            var h = (location.hash || '').toLowerCase();
+            var n = document.querySelectorAll('input').length;
+            if (h.indexOf('login') >= 0) return 'no';
+            if (n >= 2) return 'no';
             var app = document.querySelector('#app');
-            if (!app || !app.__vue_app__) return 'no_app';
+            if (!app || !app.__vue_app__) return 'no';
             var gp = app.__vue_app__.config.globalProperties;
-            if (gp && gp.$request) return 'yes';
-            var h = location.hash || '';
-            if (/home|Home/i.test(h)) return 'yes';
-            return 'no';
+            if (!gp || !gp.$request) return 'no';
+            return 'yes';
           } catch(e) { return 'err'; }
         }
         """)
@@ -476,7 +481,7 @@ final class HuaweiBridge: NSObject, ObservableObject {
           });
         }
         """
-        let r = await jsCall(body, timeout: 15)
+        let r = await jsCall(body, timeout: 18)
         let hash = (r as? String) ?? ""
         log("登录后 hash: \(hash)")
 
@@ -489,22 +494,18 @@ final class HuaweiBridge: NSObject, ObservableObject {
             return false
         }
 
-        // 关键：只要 $request 能用就算成功（登录页也可能已就绪）
-        for i in 0..<16 {
+        // 等页面跳转完成
+        for i in 0..<20 {
             if await isLoggedIn() {
-                ready = true
-                log("✓ 登录成功 (\(i)/2 秒)")
-                return true
+                // 再用探针确认有权限
+                let probe = await get("monitoringStatus")
+                if probe["__err"] == nil && !probe.isEmpty {
+                    ready = true
+                    log("✓ 登录成功 (\(i)/2 秒)")
+                    return true
+                }
             }
             try? await Task.sleep(nanoseconds: 500_000_000)
-        }
-
-        // 兜底：能取到任意接口数据就算通
-        let probe = await get("monitoringStatus")
-        if probe["__err"] == nil && !probe.isEmpty {
-            ready = true
-            log("✓ $request 可用（探针通过）")
-            return true
         }
 
         lastError = "登录失败：页面未就绪（hash=\(hash)）"
