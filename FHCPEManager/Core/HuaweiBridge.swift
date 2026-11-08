@@ -196,32 +196,39 @@ final class HuaweiBridge: NSObject, ObservableObject {
           });
         }
         """
-        let r = await jsCall(body, timeout: 12)
+        let r = await jsCall(body, timeout: 15)
         let hash = (r as? String) ?? ""
         log("登录后 hash: \(hash)")
 
-        if hash.hasPrefix("ERR") || hash == "NO_INPUT" {
-            lastError = "登录失败：\(hash)"
+        if hash.hasPrefix("ERR") {
+            lastError = "页面异常：\(hash)"
             return false
         }
-        if hash.contains("login") || hash.contains("Login") {
-            lastError = "用户名或密码错误"
+        if hash == "NO_INPUT" {
+            lastError = "页面未渲染登录框"
             return false
         }
 
-        // 等 $request 就绪
-        for _ in 0..<10 {
+        // 关键：只要 $request 能用就算成功（登录页也可能已就绪）
+        for i in 0..<16 {
             if await isLoggedIn() {
                 ready = true
-                log("✓ 登录成功")
+                log("✓ 登录成功 (\(i)/2 秒)")
                 return true
             }
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
 
-        ready = true
-        log("✓ 页面已跳转")
-        return true
+        // 兜底：能取到任意接口数据就算通
+        let probe = await get("monitoringStatus")
+        if probe["__err"] == nil && !probe.isEmpty {
+            ready = true
+            log("✓ $request 可用（探针通过）")
+            return true
+        }
+
+        lastError = "登录失败：页面未就绪（hash=\(hash)）"
+        return false
     }
 
     // MARK: 调用设备 API
