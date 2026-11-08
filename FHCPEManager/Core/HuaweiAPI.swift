@@ -2,6 +2,93 @@ import Foundation
 import CryptoKit
 import Security
 
+
+// MARK: - JSON 适配层
+//
+// 华为桥接返回的是 JSON 对象（{response:{...}} 或数组），
+// 但很多解析代码按 XMLNode 的 text()/all() 写。
+// JSONNode 提供同样的接口，避免大面积改解析逻辑。
+final class JSONNode {
+    let name: String
+    fileprivate let raw: Any?
+
+    init(name: String = "response", _ raw: Any?) {
+        self.name = name
+        self.raw = raw
+    }
+
+    convenience init(_ obj: [String: Any]) {
+        self.init(name: "response", obj["response"] ?? obj)
+    }
+
+    /// 取子节点文本（把数字也转字符串）
+    func text(_ n: String) -> String? {
+        guard let d = raw as? [String: Any], let v = d[n] else { return nil }
+        if let s = v as? String { return s.isEmpty ? nil : s }
+        if let s = v as? NSNumber { return s.stringValue }
+        if let b = v as? Bool { return b ? "1" : "0" }
+        return nil
+    }
+
+    /// 取原始值（可能是嵌套对象或数组）
+    func value(_ n: String) -> Any? {
+        (raw as? [String: Any])?[n]
+    }
+
+    /// 同名子节点列表
+    func all(_ n: String) -> [JSONNode] {
+        guard let d = raw as? [String: Any], let v = d[n] else { return [] }
+        if let arr = v as? [[String: Any]] {
+            return arr.map { JSONNode(name: n, $0) }
+        }
+        if let obj = v as? [String: Any] {
+            let keys = obj.keys.compactMap { Int($0) }.sorted()
+            if !keys.isEmpty {
+                return keys.compactMap { k in
+                    (obj[String(k)] as? [String: Any]).map { JSONNode(name: n, $0) }
+                }
+            }
+            return [JSONNode(name: n, obj)]
+        }
+        return []
+    }
+
+    /// 第 idx 个子节点
+    func child(_ n: String) -> JSONNode? {
+        guard let d = raw as? [String: Any], let v = d[n] else { return nil }
+        return JSONNode(name: n, v)
+    }
+
+    /// 自身文本
+    func text() -> String? {
+        if let s = raw as? String { return s.isEmpty ? nil : s }
+        if let n = raw as? NSNumber { return n.stringValue }
+        return nil
+    }
+
+    /// 递归查找同名节点（兼容旧 XMLNode 写法）
+    func find(_ n: String) -> JSONNode? {
+        if name == n { return self }
+        guard let d = raw as? [String: Any] else { return nil }
+        if let v = d[n] { return JSONNode(name: n, v) }
+        for (_, v) in d {
+            if let sub = v as? [String: Any],
+               let r = JSONNode(name: "", sub).find(n) { return r }
+            if let arr = v as? [[String: Any]] {
+                for item in arr {
+                    if let r = JSONNode(name: "", item).find(n) { return r }
+                }
+            }
+        }
+        return nil
+    }
+
+    var children: [JSONNode] {
+        guard let d = raw as? [String: Any] else { return [] }
+        return d.map { JSONNode(name: $0.key, $0.value) }
+    }
+}
+
 // MARK: - 极简 XML
 
 /// 轻量 XML 节点（华为接口全是 XML）
@@ -121,88 +208,28 @@ final class HuaweiAPI {
     // MARK: 登录（SCRAM-SHA256）
 
     func login(host: String, user: String, password: String) async throws {
-        configure(host: host)
+        self.host = host
         self.user = user
         self.password = password
-        loggedIn = false
-        lastErrorText = ""
 
-        // ① 先确认没被锁定，避免白白消耗尝试次数
-        try await refreshToken()
-        if let lock = try? await lockState(), lock.locked {
-            throw HuaweiError.loginFailed("设备已锁定，请等待 \(max(1, lock.minutes)) 分钟后再试")
+        // 华为的请求全部要加密，改由页面自己的 $request 代发
+        let ok = await HuaweiBridge.shared.login(host: host, user: user, password: password)
+        guard ok else {
+            throw HuaweiError.http(401)
         }
-
-        // ② challenge
-        let firstNonce = Self.randomNonce()
-        let challengeBody = "<request><username>\(Self.escape(user))</username>"
-            + "<firstnonce>\(firstNonce)</firstnonce><mode>1</mode></request>"
-
-        var chal = try await rawRequest("POST", "/api/user/challenge_login", body: challengeBody)
-        if let err = chal.find("error"), let c = err.text("code"), c != "0" {
-            // 会话失效 → 重取令牌再试一次
-            if c == "125002" || c == "125003" || c == "125001" {
-                try await refreshToken()
-                chal = try await rawRequest("POST", "/api/user/challenge_login", body: challengeBody)
-            }
-        }
-        if let err = chal.find("error"), let c = err.text("code"), c != "0" {
-            throw HuaweiError.loginFailed(Self.hintFor(chal, code: c))
-        }
-
-        guard let saltRaw = chal.text("salt"),
-              let iterStr = chal.text("iterations"),
-              let serverNonce = chal.text("servernonce"),
-              let iterations = Int(iterStr) else {
-            try await legacyLogin(user: user, password: password)
-            return
-        }
-
-        // salt 可能是 hex（64 字符）也可能是 base64
-        let salt: Data
-        if saltRaw.count == 64, saltRaw.allSatisfy({ $0.isHexDigit }),
-           let d = Self.hexToData(saltRaw) {
-            salt = d
-        } else if let d = Data(base64Encoded: saltRaw) {
-            salt = d
-        } else {
-            throw HuaweiError.parse
-        }
-
-        // 关键：认证前必须刷新一次令牌，否则设备返回 125003
-        try await refreshToken()
-
-        // ③ 计算 client proof
-        let salted = Self.pbkdf2(password: password, salt: salt, iterations: iterations, keyLen: 32)
-        let clientKey = Self.hmac(salted, "Client Key")
-        let storedKey = Self.sha256(clientKey)
-        let authMessage = "\(firstNonce),\(serverNonce),\(serverNonce)"
-        let clientSig = Self.hmac(storedKey, authMessage)
-        let proof = Self.xor(clientKey, clientSig)
-        let proofB64 = proof.base64EncodedString()
-
-        // ④ 认证
-        let authBody = "<request><clientproof>\(proofB64)</clientproof>"
-            + "<finalnonce>\(serverNonce)</finalnonce></request>"
-        let auth = try await rawRequest("POST", "/api/user/authentication_login", body: authBody)
-
-        if let err = auth.find("error"), let c = err.text("code"), c != "0" {
-            throw HuaweiError.loginFailed(Self.hintFor(auth, code: c))
-        }
-
         loggedIn = true
-
-        // 认证后再取一次令牌（设备可能轮换）
-        if let ses2 = try? await rawRequest("GET", "/api/webserver/SesTokInfo", body: nil) {
-            if let s = ses2.text("SesInfo") {
-                let c = Self.cookieOnly(s)
-                if !c.isEmpty { sessionCookie = c }
-            }
-            if let t = ses2.text("TokInfo") { token = t }
-        }
     }
 
-    /// 查询锁定状态
+    /// 通过桥接取数据（别名方式）
+    func bridgeGet(_ alias: String) async -> [String: Any] {
+        await HuaweiBridge.shared.get(alias)
+    }
+
+    /// 通过桥接提交
+    func bridgePost(_ alias: String, _ body: [String: Any]) async -> [String: Any] {
+        await HuaweiBridge.shared.post(alias, body)
+    }
+
     func lockState() async throws -> (locked: Bool, minutes: Int) {
         let n = try await rawRequest("GET", "/api/user/state-login", body: nil)
         let locked = (n.text("lockstatus") ?? "0") == "1"
@@ -294,10 +321,63 @@ final class HuaweiAPI {
     }
 
     /// 请求并检查 error 节点
-    internal func request(_ method: String, _ path: String, body: String? = nil) async throws -> XMLNode {
-        let node = try await rawRequest(method, path, body: body)
-        try Self.throwIfError(node)
-        return node
+    /// 兼容层：所有请求都改由页面代发（华为的加密无法在原生侧复刻）
+    internal func request(_ method: String, _ path: String, body: String? = nil) async throws -> JSONNode {
+        // body 是 XML 字符串，要转成 JSON 对象给页面
+        var dict: [String: Any] = [:]
+        if let b = body {
+            dict = Self.xmlToDict(b)
+        }
+
+        let result: [String: Any]
+        if method.uppercased() == "GET" {
+            result = await HuaweiBridge.shared.getPath(path)
+        } else {
+            result = await HuaweiBridge.shared.postPath(path, dict)
+        }
+
+        if let err = result["__err"] as? String {
+            lastErrorText = err
+            throw HuaweiError.http(Int(err) ?? 0)
+        }
+        if let e = result["error"] as? [String: Any],
+           let code = e["code"] {
+            lastErrorText = "\(code)"
+            throw HuaweiError.http(Int("\(code)") ?? 0)
+        }
+        return JSONNode(result)
+    }
+
+    /// 极简 XML → 字典（用于把 POST body 交给页面）
+    static func xmlToDict(_ xml: String) -> [String: Any] {
+        var dict: [String: Any] = [:]
+        let parser = XMLParser(data: Data(xml.utf8))
+        let b = XMLTreeBuilder()
+        parser.delegate = b
+        parser.parse()
+        guard let root = b.root else { return dict }
+        for c in root.children {
+            if c.children.isEmpty {
+                dict[c.name] = c.value
+            } else {
+                dict[c.name] = recursiveDict(c)
+            }
+        }
+        return dict
+    }
+
+    private static func recursiveDict(_ node: XMLNode) -> Any {
+        if node.children.isEmpty { return node.value }
+        // 子节点同名 → 数组
+        let names = node.children.map { $0.name }
+        if Set(names).count == 1 && names.count > 1 {
+            return node.children.map { recursiveDict($0) }
+        }
+        var d: [String: Any] = [:]
+        for c in node.children {
+            d[c.name] = c.children.isEmpty ? c.value : recursiveDict(c)
+        }
+        return d
     }
 
     private static func throwIfError(_ node: XMLNode) throws {
@@ -320,94 +400,139 @@ final class HuaweiAPI {
         guard loggedIn else { return [:] }
         var v: [String: String] = [:]
 
-        // ① 信号
-        if let n = try? await request("GET", "/api/device/signal") {
-            // 5G 优先
-            let nr = ["nr_rsrp": "rsrp", "nr_rsrq": "rsrq", "nr_sinr": "sinr",
-                      "nr_pci": "pci", "nr_band": "band", "nr_nrarfcn": "arfcn",
-                      "nr_cell_id": "cellid"]
-            var used5G = false
-            for (src, dst) in nr {
-                if let t = n.text(src) {
+        // ① 信号（华为字段带 nr 前缀，单位含在值里）
+        let sig = await bridgeGet("singal")
+        if let err = sig["__err"] as? String {
+            v["__sigErr"] = err
+        } else {
+            func put(_ src: String, _ dst: String) {
+                if let t = sig[src] as? String, !t.isEmpty {
                     v[dst] = Self.cleanUnit(t)
-                    used5G = true
                 }
             }
-            if !used5G {
-                for (src, dst) in ["rsrp": "rsrp", "rsrq": "rsrq", "sinr": "sinr",
-                                   "pci": "pci", "band": "band", "earfcn": "arfcn",
-                                   "cell_id": "cellid"] {
-                    if let t = n.text(src) { v[dst] = Self.cleanUnit(t) }
-                }
+            put("nrrsrp", "rsrp")
+            put("nrrsrq", "rsrq")
+            put("nrrssi", "rssi")
+            put("nrsinr", "sinr")
+            put("nrearfcn", "arfcn")
+            put("pci", "pci")
+            put("cell_id", "cellid")
+            put("nrcqi0", "qci")
+
+            // 频段形如 "100MHz@627264(N78)"
+            if let band = sig["bandInfo"] as? String, !band.isEmpty {
+                v["band"] = band.uppercased().replacingOccurrences(of: "N", with: "")
+                    .replacingOccurrences(of: "B", with: "")
             }
-            if let r = n.text("rssi") { v["rssi"] = Self.cleanUnit(r) }
+            if let bw = sig["nrulbandwidth"] as? String, !bw.isEmpty {
+                v["bw"] = bw
+            }
+            // 层数 / MCS
+            if let r = sig["nrrank"] as? String, !r.isEmpty { v["rank"] = r }
+            if let m = sig["nrulmcs"] as? String, !m.isEmpty { v["ulmcs"] = m }
+            if let m = sig["nrdlmcs"] as? String, !m.isEmpty { v["dlmcs"] = m }
+            if let p = sig["nrtxpower"] as? String, !p.isEmpty { v["txpower"] = p }
+            if let b = sig["nrbler"] as? String, !b.isEmpty { v["bler"] = b }
+            if let m = sig["mode"] as? String, !m.isEmpty { v["mode"] = m }
+            if let t = sig["tac"] as? String, !t.isEmpty { v["tac"] = t }
+            if let p = sig["plmn"] as? String, !p.isEmpty { v["plmn"] = p }
         }
 
         // ② 运行状态
-        if let n = try? await request("GET", "/api/monitoring/status") {
-            if let t = n.text("CurrentNetworkType") { v["netmode"] = Self.netType(t) }
-            if let t = n.text("SignalStrength") { v["signalLevel"] = t }
-            if let t = n.text("maxsignal") { v["signalMax"] = t }
-            if let t = n.text("ConnectionStatus") { v["connStatus"] = t }
-            if let t = n.text("SimStatus") { v["simstatus"] = (t == "1" || t == "0") ? "0" : "1" }
-            if let t = n.text("CurrentWifiUser") { v["online"] = t }
-            if let t = n.text("TotalWifiUser") { v["onlineMax"] = t }
-            if let t = n.text("RoamingStatus") { v["roaming"] = t }
-            if let t = n.text("CurrentServiceDomain") { v["domain"] = t }
-            if let t = n.text("RegistrationStatus") { v["regstatus"] = (t == "1") ? "0" : "1" }
-            if let t = n.text("BatteryPercent") { v["battery"] = t }
-            if let t = n.text("BatteryStatus") { v["charging"] = t }
+        let st = await bridgeGet("monitoringStatus")
+        if let t = st["CurrentNetworkType"] as? String { v["netmode"] = Self.netType(t) }
+        if let t = st["SignalIconNr"] as? String { v["signalIcon"] = t }
+            else if let t = st["SignalIcon"] as? String { v["signalIcon"] = t }
+        if let t = st["maxsignal"] as? String { v["signalMax"] = t }
+        if let t = st["ConnectionStatus"] as? String {
+            v["connStatus"] = t
+            v["regstatus"] = (t == "901") ? "0" : "1"
         }
+        if let t = st["SimStatus"] as? String { v["simstatus"] = (t == "1") ? "0" : "1" }
+        if let t = st["CurrentWifiUser"] as? String { v["online"] = t }
+        if let t = st["TotalWifiUser"] as? String { v["onlineMax"] = t }
+        if let t = st["RoamingStatus"] as? String { v["roaming"] = t }
+        if let t = st["BatteryPercent"] as? String, !t.isEmpty { v["battery"] = t }
+        if let t = st["flymode"] as? String { v["airplane"] = t }
 
-        // ③ 流量
-        if let n = try? await request("GET", "/api/monitoring/traffic-statistics") {
-            if let t = n.text("CurrentDownloadRate"), let d = Double(t) {
-                v["speedRx"] = String(Int(d))          // 字节/秒
-            }
-            if let t = n.text("CurrentUploadRate"), let d = Double(t) {
-                v["speedTx"] = String(Int(d))
-            }
-            if let t = n.text("TotalDownload") { v["todayRx"] = t }
-            if let t = n.text("TotalUpload") { v["todayTx"] = t }
-            if let t = n.text("TotalConnectTime") { v["uptime"] = t }
-            if let t = n.text("CurrentDownload") { v["sessionRx"] = t }
-            if let t = n.text("CurrentUpload") { v["sessionTx"] = t }
+        // ③ 实时与累计流量
+        let tr = await bridgeGet("monitoringTraffic")
+        if let t = tr["CurrentDownloadRate"] as? String, let d = Double(t) {
+            v["speedRx"] = String(Int(d))     // 字节/秒
+        }
+        if let t = tr["CurrentUploadRate"] as? String, let d = Double(t) {
+            v["speedTx"] = String(Int(d))
+        }
+        if let t = tr["TotalDownload"] as? String { v["totalRx"] = t }
+        if let t = tr["TotalUpload"] as? String { v["totalTx"] = t }
+        if let t = tr["CurrentDownload"] as? String { v["sessionRx"] = t }
+        if let t = tr["CurrentUpload"] as? String { v["sessionTx"] = t }
+        if let t = tr["CurrentConnectTime"] as? String, let n = Int(t) {
+            v["uptime"] = String(n)
         }
 
         // ④ 本月
-        if let n = try? await request("GET", "/api/monitoring/month_statistics") {
-            if let t = n.text("CurrentMonthDownload") { v["monthRx"] = t }
-            if let t = n.text("CurrentMonthUpload") { v["monthTx"] = t }
-            if let d = Double(v["monthRx"] ?? "0"), let u = Double(v["monthTx"] ?? "0") {
-                v["monthTotal"] = String(Int(d + u))
-            }
-            if let t = n.text("MonthDuration") { v["monthDuration"] = t }
+        let mo = await bridgeGet("mounthTraffic")
+        if let t = mo["CurrentMonthDownload"] as? String { v["monthRx"] = t }
+        if let t = mo["CurrentMonthUpload"] as? String { v["monthTx"] = t }
+        if let d = Double(v["monthRx"] ?? "0"), let u = Double(v["monthTx"] ?? "0") {
+            v["monthTotal"] = String(Int(d + u))
         }
-        // 今日合计
-        if let d = Double(v["todayRx"] ?? "0"), let u = Double(v["todayTx"] ?? "0") {
-            v["todayTotal"] = String(Int(d + u))
+        if let t = mo["CurrentDayUsed"] as? String, let n = Double(t) {
+            v["todayUsed"] = String(Int(n))
         }
+        if let t = mo["MonthLastClearTime"] as? String { v["monthStart"] = t }
 
         // ⑤ 运营商
-        if let n = try? await request("GET", "/api/net/current-plmn") {
-            if let t = n.text("FullName") { v["carrier"] = t }
-            else if let t = n.text("ShortName") { v["carrier"] = t }
-            if let t = n.text("Numeric") { v["plmn"] = t }
-        }
+        let pl = await bridgeGet("netCurrentPlmn")
+        if let t = pl["FullName"] as? String, !t.isEmpty { v["carrier"] = t }
+        else if let t = pl["ShortName"] as? String, !t.isEmpty { v["carrier"] = t }
+        if let t = pl["Numeric"] as? String { v["plmn"] = t }
 
         // ⑥ 设备信息
-        if let n = try? await request("GET", "/api/device/information") {
-            if let t = n.text("DeviceName") { v["model"] = t }
-            if let t = n.text("SerialNumber") { v["sn"] = t }
-            if let t = n.text("Imei") { v["imei"] = t }
-            if let t = n.text("Imsi") { v["imsi"] = t }
-            if let t = n.text("Iccid") { v["iccid"] = t }
-            if let t = n.text("HardwareVersion") { v["hwver"] = t }
-            if let t = n.text("SoftwareVersion") { v["swver"] = t }
-            if let t = n.text("MacAddress1") { v["mac"] = t }
-            if let t = n.text("WebUIVersion") { v["webver"] = t }
-            if let t = n.text("DeviceType") { v["deviceType"] = t }
+        let di = await bridgeGet("deviceInformation")
+        if let t = di["DeviceName"] as? String { v["model"] = t }
+            else if let t = di["devicename"] as? String { v["model"] = t }
+        if let t = di["SerialNumber"] as? String { v["sn"] = t }
+        if let t = di["Imei"] as? String { v["imei"] = t }
+        if let t = di["Imsi"] as? String { v["imsi"] = t }
+        if let t = di["Iccid"] as? String { v["iccid"] = t }
+        if let t = di["HardwareVersion"] as? String { v["hwver"] = t }
+        if let t = di["SoftwareVersion"] as? String { v["swver"] = t }
+        if let t = di["MacAddress1"] as? String { v["mac"] = t }
+        if let t = di["DeviceType"] as? String { v["deviceType"] = t }
+
+        // 设备扩展信息（硬件版本等）
+        let ex = await bridgeGet("systemDeviceinfoex")
+        if v["hwver"] == nil, let t = ex["HardwareVersion"] as? String { v["hwver"] = t }
+        if let cust = ex["custinfo"] as? [String: Any],
+           let n = cust["CustDeviceName"] as? String, !n.isEmpty {
+            v["model"] = n
         }
+        if let t = ex["UpTime"] as? String { v["uptime2"] = t }
+
+        // ⑦ WLAN 状态
+        let wl = await bridgeGet("wlanStatusSwitch")
+        if let radios = wl["radios"] as? [[String: Any]] {
+            for (i, r) in radios.enumerated() {
+                let key = (i == 0) ? "ssid24" : "ssid5g"
+                if let s = r["Ssid"] as? String { v[key] = s }
+                if let e = r["WifiEnable"] as? String {
+                    v[(i == 0) ? "wifi24" : "wifi5g"] = e
+                }
+            }
+            v["wifiCount"] = String(radios.count)
+        }
+
+        // ⑧ 连接信息（WAN IP）
+        let cn = await bridgeGet("connection")
+        if let t = cn["IPv4Address"] as? String { v["wanIP"] = t }
+        if let t = cn["RoamAutoConnectEnable"] as? String { v["roamAuto"] = t }
+
+        // ⑨ 网络模式
+        let nm = await bridgeGet("netMode")
+        if let t = nm["NetworkMode"] as? String { v["netModeRaw"] = t }
+        if let t = nm["NetworkBand"] as? String { v["netBand"] = t }
 
         return v
     }
@@ -415,15 +540,13 @@ final class HuaweiAPI {
     /// 轻量：只取速率与今日流量（每秒调用）
     func fetchRates() async -> (rx: Double, tx: Double, todayRx: Double, todayTx: Double, uptime: Int) {
         guard loggedIn else { return (0,0,0,0,0) }
-        guard let n = try? await request("GET", "/api/monitoring/traffic-statistics") else {
-            return (0,0,0,0,0)
+        let t = await bridgeGet("monitoringTraffic")
+        func d(_ k: String) -> Double {
+            Double((t[k] as? String) ?? "0") ?? 0
         }
-        let rx  = Double(n.text("CurrentDownloadRate") ?? "0") ?? 0
-        let tx  = Double(n.text("CurrentUploadRate") ?? "0") ?? 0
-        let tRx = Double(n.text("TotalDownload") ?? "0") ?? 0
-        let tTx = Double(n.text("TotalUpload") ?? "0") ?? 0
-        let up  = Int(n.text("TotalConnectTime") ?? "0") ?? 0
-        return (rx, tx, tRx, tTx, up)
+        return (d("CurrentDownloadRate"), d("CurrentUploadRate"),
+                d("TotalDownload"), d("TotalUpload"),
+                Int(d("CurrentConnectTime")))
     }
 
     // MARK: 控制
@@ -431,9 +554,8 @@ final class HuaweiAPI {
     /// 重启（Control: 1 = 重启）
     func reboot() async -> Bool {
         do {
-            _ = try await request("POST", "/api/device/control",
-                                  body: "<request><Control>1</Control></request>")
-            return true
+            let r = await bridgePost("deviceControl", ["Control": 1])
+            return r["__err"] == nil
         } catch {
             lastErrorText = (error as? LocalizedError)?.errorDescription ?? "\(error)"
             return false
@@ -443,9 +565,8 @@ final class HuaweiAPI {
     /// 恢复出厂（Control: 2）
     func factoryReset() async -> Bool {
         do {
-            _ = try await request("POST", "/api/device/control",
-                                  body: "<request><Control>2</Control></request>")
-            return true
+            let r = await bridgePost("deviceControl", ["Control": 2])
+            return r["__err"] == nil
         } catch {
             lastErrorText = (error as? LocalizedError)?.errorDescription ?? "\(error)"
             return false
@@ -455,9 +576,8 @@ final class HuaweiAPI {
     /// 移动数据开关
     func setMobileData(_ on: Bool) async -> Bool {
         do {
-            _ = try await request("POST", "/api/dialup/mobile-dataswitch",
-                                  body: "<request><dataswitch>\(on ? 1 : 0)</dataswitch></request>")
-            return true
+            let r = await bridgePost("homeDataSwitch", ["dataswitch": on ? 1 : 0])
+            return r["__err"] == nil
         } catch {
             lastErrorText = (error as? LocalizedError)?.errorDescription ?? "\(error)"
             return false
@@ -466,11 +586,12 @@ final class HuaweiAPI {
 
     /// 定时重启
     func setTimedReboot(enable: Bool, start: String, end: String) async -> Bool {
-        let body = "<request><TimingReboot>\(enable ? 1 : 0)</TimingReboot>"
-            + "<start_time>\(start)</start_time><end_time>\(end)</end_time></request>"
         do {
-            _ = try await request("POST", "/api/diagnosis/time_reboot", body: body)
-            return true
+            let r = await bridgePost("timeReboot", [
+                "TimingReboot": enable ? 1 : 0,
+                "start_time": start, "end_time": end
+            ])
+            return r["__err"] == nil
         } catch {
             lastErrorText = (error as? LocalizedError)?.errorDescription ?? "\(error)"
             return false
@@ -480,9 +601,8 @@ final class HuaweiAPI {
     /// 信号灯
     func setLed(_ on: Bool) async -> Bool {
         do {
-            _ = try await request("POST", "/api/led/appctrlled",
-                                  body: "<request><ledapp>\(on ? 1 : 0)</ledapp></request>")
-            return true
+            let r = await bridgePost("ledApplyCtrl", ["ledapp": on ? 1 : 0])
+            return r["__err"] == nil
         } catch { return false }
     }
 
@@ -504,17 +624,20 @@ final class HuaweiAPI {
         <BoxType>1</BoxType><SortType>0</SortType><Ascending>0</Ascending>\
         <UnreadPreferred>0</UnreadPreferred></request>
         """
-        guard let n = try? await request("POST", "/api/sms/sms-list", body: body) else { return [] }
+        let rr = await bridgePost("smsList", [
+            "PageIndex": page, "ReadCount": count,
+            "BoxType": 1, "SortType": 0, "Ascending": 0, "UnreadPreferred": 0
+        ])
+        guard rr["__err"] == nil else { return [] }
+        let n = JSONNode(rr)
 
-        return n.all("Messages").flatMap { box -> [SmsItem] in
-            box.all("Message").map { m in
+        return n.all("Message").map { m in
                 SmsItem(index: m.text("Index") ?? "",
                         phone: m.text("Phone") ?? "",
                         content: (m.text("Content") ?? "").replacingOccurrences(of: "&#13;", with: "\n"),
                         date: m.text("Date") ?? "",
                         read: (m.text("Smstat") ?? "0") == "0",
                         outgoing: (m.text("SmsType") ?? "1") == "2")
-            }
         }
     }
 
@@ -528,9 +651,16 @@ final class HuaweiAPI {
         <Reserved>1</Reserved><Date>\(Self.nowString())</Date></request>
         """
         _ = list
+        _ = body
         do {
-            _ = try await request("POST", "/api/sms/send-sms", body: body)
-            return true
+            let r = await bridgePost("sendSms", [
+                "Index": -1,
+                "Phones": ["Phone": [joined]],
+                "Sca": "", "Content": text,
+                "Length": text.utf8.count, "Reserved": 1,
+                "Date": Self.nowString()
+            ])
+            return r["__err"] == nil
         } catch {
             lastErrorText = (error as? LocalizedError)?.errorDescription ?? "\(error)"
             return false
@@ -539,19 +669,18 @@ final class HuaweiAPI {
 
     func deleteSms(indices: [String]) async -> Bool {
         let nums = indices.joined(separator: ";")
-        let body = "<request><Index>\(nums)</Index></request>"
+        _ = nums
         do {
-            _ = try await request("POST", "/api/sms/delete-sms", body: body)
-            return true
+            let r = await bridgePost("deleteSms", ["Index": indices.joined(separator: ";")])
+            return r["__err"] == nil
         } catch { return false }
     }
 
     func markSmsRead(indices: [String]) async -> Bool {
-        let nums = indices.joined(separator: ";")
+        _ = indices
         do {
-            _ = try await request("POST", "/api/sms/set-read",
-                                  body: "<request><Index>\(nums)</Index></request>")
-            return true
+            let r = await bridgePost("setSmsRead", ["Index": indices.joined(separator: ";")])
+            return r["__err"] == nil
         } catch { return false }
     }
 
@@ -565,11 +694,13 @@ final class HuaweiAPI {
     }
 
     func fetchHosts() async -> [HostItem] {
-        guard let n = try? await request("GET", "/api/system/HostInfo") else { return [] }
-        return n.all("Host").map { h in
-            HostItem(name: h.text("HostName") ?? "-",
-                     ip: h.text("IpAddress") ?? "-",
-                     mac: h.text("MacAddress") ?? "-")
+        let list = await HuaweiBridge.shared.getList("hostList")
+        return list.compactMap { h in
+            let name = (h["HostName"] as? String) ?? "-"
+            let ip = (h["IpAddress"] as? String) ?? "-"
+            let mac = (h["MacAddress"] as? String) ?? "-"
+            guard mac != "-" || ip != "-" else { return nil }
+            return HostItem(name: name.isEmpty ? "设备" : name, ip: ip, mac: mac)
         }
     }
 
@@ -577,19 +708,17 @@ final class HuaweiAPI {
 
     /// 当前制式（net-mode）
     func fetchNetMode() async -> (mode: String, sub: String) {
-        guard let n = try? await request("GET", "/api/net/net-mode") else { return ("", "") }
-        return (n.text("NetworkMode") ?? "", n.text("NetworkBand") ?? "")
+        let m = await bridgeGet("netMode")
+        return ((m["NetworkMode"] as? String) ?? "", (m["NetworkBand"] as? String) ?? "")
     }
 
     /// 当前锁定
     func fetchLockFreq() async -> [String: String] {
-        guard let n = try? await request("GET", "/api/net/lock-freq") else { return [:] }
+        // H153 固件的 lock-freq 接口未开放，锁定状态由 netMode 反映
         var v: [String: String] = [:]
-        if let t = n.text("LTEBandLock") { v["lteBand"] = t }
-        if let t = n.text("LTEFreqLock") { v["lteFreq"] = t }
-        if let t = n.text("NRBandLock") { v["nrBand"] = t }
-        if let t = n.text("NRFreqLock") { v["nrFreq"] = t }
-        if let t = n.text("NRCellLock") { v["nrCell"] = t }
+        let m = await bridgeGet("netMode")
+        if let t = m["LTEBand"] as? String, !t.isEmpty { v["lteBand"] = t }
+        if let t = m["NetworkBand"] as? String, !t.isEmpty { v["nrBand"] = t }
         return v
     }
 
@@ -613,28 +742,24 @@ final class HuaweiAPI {
             break   // 全空 = 解除
         }
 
-        let body = "<request>"
-            + "<NRBandLock>\(nrBand)</NRBandLock>"
-            + "<NRFreqLock>\(nrFreq)</NRFreqLock>"
-            + "<NRCellLock>\(nrCell)</NRCellLock>"
-            + "</request>"
-
         do {
-            _ = try await request("POST", "/api/net/lock-freq", body: body)
+            let r = await bridgePost("lockFreq", [
+                "NRBandLock": nrBand,
+                "NRFreqLock": nrFreq,
+                "NRCellLock": nrCell
+            ])
+            if let e = r["__err"] {
+                lastErrorText = "\(e)"
+                return false
+            }
             return true
-        } catch {
-            lastErrorText = (error as? LocalizedError)?.errorDescription ?? "\(error)"
-            return false
         }
     }
 
     /// 邻区列表
     func fetchNeighborCells() async -> [(band: String, pci: String, freq: String, rsrp: String)] {
-        guard let n = try? await request("GET", "/api/device/nbrcellinfo") else { return [] }
-        return n.all("Cell").map { c in
-            (c.text("Band") ?? "-", c.text("PCI") ?? "-",
-             c.text("Frequency") ?? "-", c.text("RSRP") ?? "-")
-        }
+        // H153 固件未开放 nbrcellinfo
+        return []
     }
 
     // MARK: 工具
