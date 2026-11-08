@@ -212,8 +212,12 @@ final class HuaweiAPI {
         self.user = user
         self.password = password
 
-        // 华为的请求全部要加密，改由页面自己的 $request 代发
-        let ok = await HuaweiBridge.shared.login(host: host, user: user, password: password)
+        // 优先用原生 SCRAM（不依赖页面 JS）
+        var ok = await HuaweiBridge.shared.nativeLogin(host: host, user: user, password: password)
+        if !ok {
+            // 兜底：走页面通道
+            ok = await HuaweiBridge.shared.login(host: host, user: user, password: password)
+        }
         guard ok else {
             let reason = (await HuaweiBridge.shared.lastError) ?? "无法连接设备"
             lastErrorText = reason
@@ -223,9 +227,30 @@ final class HuaweiAPI {
         loggedIn = true
     }
 
-    /// 通过桥接取数据（别名方式）
+    /// 别名 → 路径
+    private static let aliasPath: [String: String] = [
+        "singal": "/api/device/signal",
+        "monitoringStatus": "/api/monitoring/status",
+        "monitoringTraffic": "/api/monitoring/traffic-statistics",
+        "mounthTraffic": "/api/monitoring/month_statistics",
+        "dialyTraffic": "/api/monitoring/daily-data-limit",
+        "netCurrentPlmn": "/api/net/current-plmn",
+        "hostList": "/api/wlan/host-list",
+        "wlanStatusSwitch": "/api/wlan/wlan-switch",
+        "netMode": "/api/net/net-mode",
+        "pinStatus": "/api/pin/status",
+        "wanInfo": "/api/ntwk/dualwaninfo",
+        "deviceInformation": "/api/device/information",
+        "convergedStatus": "/api/monitoring/converged-status",
+    ]
+
+    /// 取数据：优先原生（SCRAM 登录后），失败再走页面
     func bridgeGet(_ alias: String) async -> [String: Any] {
-        await HuaweiBridge.shared.get(alias)
+        if let path = Self.aliasPath[alias] {
+            let r = await HuaweiBridge.shared.nativeGetPath(path)
+            if !r.isEmpty { return r }
+        }
+        return await HuaweiBridge.shared.get(alias)
     }
 
     /// 通过桥接提交
