@@ -22,19 +22,20 @@ struct RootView: View {
 
     var body: some View {
         ZStack {
-            // 隐藏的 WKWebView 宿主：负责保持 CPE 会话
+            // 三个隐藏的 WebView 宿主
+            // WebKit 规则：视图必须在窗口内且 alpha > 0，否则暂停 JS 执行。
+            // 所以放在角落、2×2、不加 opacity。
             BridgeHost()
-                .frame(width: 1, height: 1)
-                .opacity(0.01)
+                .frame(width: 2, height: 2)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 .allowsHitTesting(false)
+                .zIndex(-1)
 
-            // OPPO CPE 的会话宿主
-            // WebKit 规则：视图必须「在窗口内」且 alpha > 0，否则暂停 JS。
-            // 所以：放在左下角、尺寸小、不加 opacity、不用 offset 移出屏幕。
-            // 华为 CPE 的会话宿主
             HuaweiHost()
                 .frame(width: 2, height: 2)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .allowsHitTesting(false)
+                .zIndex(-1)
 
             OppoHost()
                 .frame(width: 2, height: 2)
