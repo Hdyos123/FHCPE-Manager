@@ -864,6 +864,17 @@ final class HuaweiAPI {
         }
     }
 
+
+    /// 服务小区
+    func fetchServingCell() async -> CellEntry? {
+        guard let raw = await HuaweiBridge.shared.getRaw("seccellinfo") else { return nil }
+        let list = Self.parseCellList(raw, hasBandwidth: true)
+        guard let c = list.first else { return nil }
+        return CellEntry(band: c.band, pci: c.pci, arfcn: c.freq,
+                         rsrp: c.rsrp, rsrq: c.rsrq, rssi: c.rssi,
+                         sinr: c.sinr, bw: c.bw)
+    }
+
     /// 邻区列表
     /// 小区条目
     struct CellEntry: Identifiable {
