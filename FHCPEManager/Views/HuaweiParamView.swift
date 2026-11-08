@@ -1,311 +1,391 @@
 import SwiftUI
 
-/// 华为参数页：设备头卡 / 蜂窝网络 / SIM 与身份 / WAN 与地址 / 固件与档案 / 进网标志
+/// 华为参数页：设备头卡 + 蜂窝网络 + SIM 与身份 + WAN 与地址 + 固件与档案 + 进网标志
 struct HuaweiParamView: View {
     @EnvironmentObject var store: CpeStore
 
-    @State private var masked = true
     @State private var revealed: Set<String> = []
     @State private var showModulation = false
+    @State private var showHardware = false
 
     private var s: CpeStatus { store.status }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 12) {
-                    deviceHeader
-                    cellCard
-                    simCard
-                    wanCard
-                    firmwareCard
-                    entryCard
-                }
-                .padding(.horizontal, 14)
-                .padding(.top, 8)
-                .padding(.bottom, 30)
+        ScrollView {
+            VStack(spacing: 12) {
+                deviceHeader
+                cellularCard
+                identityCard
+                wanCard
+                firmwareCard
+                certCard
             }
-            .background(GlassListBackground())
-            .navigationTitle("参数")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Haptic.light()
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            masked.toggle()
-                            if !masked { revealed.removeAll() }
-                        }
-                    } label: {
-                        Image(systemName: masked ? "eye.slash" : "eye")
-                            .font(.system(size: 13, weight: .medium))
-                    }
-                }
-            }
-            .sheet(isPresented: $showModulation) { modulationSheet }
+            .padding(.horizontal, 12)
+            .padding(.top, 6)
+            .padding(.bottom, 96)
+        }
+        .background(GlassListBackground())
+        .refreshable { await store.fetchAll() }
+        .sheet(isPresented: $showModulation) {
+            ModulationSheet(status: s)
+        }
+        .sheet(isPresented: $showHardware) {
+            HardwareSheet(status: s)
         }
     }
+}
 
-    // MARK: 设备头卡
-
-    private var deviceHeader: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 5) {
-                Image(systemName: "wifi.router")
-                    .font(.system(size: 10))
-                Text("设备 · " + (s["regstatus"] == "0" ? "在线" : "离线"))
-                    .font(.system(size: 11.5, weight: .medium))
+// MARK: - 设备头卡
+private extension HuaweiParamView {
+    var deviceHeader: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "cpu")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.blue)
+                Text("设备")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.blue)
+                Spacer()
             }
-            .foregroundStyle(s["regstatus"] == "0" ? Color.green : Color.secondary)
 
-            Text(modelText)
-                .font(.system(size: 30, weight: .bold, design: .rounded))
-                .lineLimit(1)
-                .minimumScaleFactor(0.55)
-                .padding(.top, 2)
+            Text(s["model"].isEmpty ? "H153-381" : s["model"])
+                .font(.system(size: 32, weight: .bold))
+                .foregroundStyle(.primary)
 
-            Text(uptimeLine)
-                .font(.system(size: 12.5))
+            Text("已连接 · 已在线 \(uptimeText)")
+                .font(.system(size: 12))
                 .foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .glassCard(radius: 22)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard(radius: 20)
     }
 
-    private var modelText: String {
-        let m = s["model"]
-        return m.isEmpty ? "Huawei CPE" : m
+    var uptimeText: String {
+        let up = Int(s["uptime"]) ?? 0
+        guard up > 0 else { return "--" }
+        let d = up / 86400, h = (up % 86400) / 3600
+        return "\(d)天\(h)时"
     }
+}
 
-    private var uptimeLine: String {
-        let t = s.int("uptime")
-        if t <= 0 { return "已连接 · 在线时长 --" }
-        let d = t / 86400, h = (t % 86400) / 3600
-        if d > 0 { return "已连接 · 已在线 \(d) 天 \(h) 时" }
-        return "已连接 · 已在线 \(h) 小时"
-    }
-
-    // MARK: 蜂窝网络
-
-    private var cellCard: some View {
+// MARK: - 蜂窝网络
+private extension HuaweiParamView {
+    var cellularCard: some View {
         VStack(alignment: .leading, spacing: 0) {
-            cardTitle("蜂窝网络")
+            sectionTitle("蜂窝网络")
 
-            kvRow("Band", bandText)
-            rowLine
-            kvRow("PLMN", s["plmn"].isEmpty ? "--" : s["plmn"], copyable: true)
-            rowLine
-            kvRow("CELL_ID", s["cellid"].isEmpty ? "--" : s["cellid"], copyable: true)
-            rowLine
+            kv("Band", s["bandFull"].isEmpty ? (s["band"].isEmpty ? "--" : s["band"]) : s["bandFull"])
+            Divider().opacity(0.25).padding(.leading, 16)
+            kv("PLMN", s["plmn"].isEmpty ? "--" : s["plmn"])
+            Divider().opacity(0.25).padding(.leading, 16)
+
+            HStack {
+                Text("CELL_ID")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(s["cellid"].isEmpty ? "--" : s["cellid"])
+                    .font(.system(size: 12.5, design: .monospaced))
+                    .foregroundStyle(.primary)
+                Button {
+                    Haptic.success()
+                    UIPasteboard.general.string = s["cellid"]
+                    store.toast("已复制 CELL_ID")
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 12)
+
+            Divider().opacity(0.25).padding(.leading, 16)
 
             Button {
                 Haptic.light()
                 showModulation = true
             } label: {
                 HStack(spacing: 10) {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.purple.opacity(0.16))
-                        .frame(width: 28, height: 28)
-                        .overlay(
-                            Image(systemName: "waveform")
-                                .font(.system(size: 12))
-                                .foregroundStyle(.purple)
-                        )
+                    ZStack {
+                        Circle().fill(Color.purple.opacity(0.16)).frame(width: 28, height: 28)
+                        Image(systemName: "waveform")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.purple)
+                    }
                     Text("调制与码流")
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(.primary)
+                        .font(.system(size: 13.5))
                     Spacer()
-                    Text("CQI:" + (s["qci"].isEmpty ? "--" : s["qci"]))
+                    Text("CQI0:\(s["qci"].isEmpty ? "--" : s["qci"])")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.secondary.opacity(0.5))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary.opacity(0.6))
                 }
-                .padding(.vertical, 4)
+                .padding(.horizontal, 16).padding(.vertical, 11)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }
-        .padding(16)
-        .glassCard(radius: 22)
+        .glassCard(radius: 20)
     }
 
-    private var bandText: String {
-        let bw = s["bw"].isEmpty ? "" : s["bw"] + "@"
-        let arfcn = s["arfcn"].isEmpty ? "--" : s["arfcn"]
-        let band = s["band"].isEmpty ? "--" : "N" + s["band"]
-        return "\(bw)\(arfcn)(\(band))"
+    func sectionTitle(_ t: String) -> some View {
+        Text(t)
+            .font(.system(size: 16, weight: .bold))
+            .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 8)
     }
 
-    // MARK: SIM 与身份
-
-    private var simCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            cardTitle("SIM 与身份")
-
-            kvRow("序列号", mask("sn"), field: "sn", copyable: false)
-            rowLine
-            kvRow("IMEI", mask("imei"), field: "imei")
-            rowLine
-            kvRow("IMSI", mask("imsi"), field: "imsi")
-            rowLine
-            kvRow("本机号码", mask("phone"), field: "phone")
+    func kv(_ k: String, _ v: String) -> some View {
+        HStack {
+            Text(k)
+                .font(.system(size: 12.5))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(v)
+                .font(.system(size: 12.5))
+                .foregroundStyle(.primary)
         }
-        .padding(16)
-        .glassCard(radius: 22)
+        .padding(.horizontal, 16).padding(.vertical, 12)
     }
+}
 
-    private func mask(_ key: String) -> String {
-        let v = s[key]
-        if v.isEmpty || v == "-" { return "--" }
-        if !masked || revealed.contains(key) { return v }
-        guard v.count > 6 else { return String(repeating: "•", count: v.count) }
-        let head = v.prefix(3)
-        let tail = v.suffix(3)
-        return "\(head)\(String(repeating: "•", count: max(3, v.count - 6)))\(tail)"
-    }
-
-    // MARK: WAN 与地址
-
-    private var wanCard: some View {
+// MARK: - SIM 与身份（打码 + 眼睛）
+private extension HuaweiParamView {
+    var identityCard: some View {
         VStack(alignment: .leading, spacing: 0) {
-            cardTitle("WAN 与地址")
-
-            kvRow("LAN MAC 地址", s["mac"].isEmpty ? "--" : s["mac"], copyable: true)
-            rowLine
-            kvRow("流量 WAN IP", s["wanIP"].isEmpty ? "--" : s["wanIP"], copyable: true)
-            rowLine
-            kvRow("流量 WAN IPv6", s["wanIPv6"].isEmpty ? "--" : s["wanIPv6"], copyable: true)
+            sectionTitle("SIM 与身份")
+            secretRow("序列号", key: "sn", value: s["sn"])
+            Divider().opacity(0.25).padding(.leading, 16)
+            secretRow("IMEI", key: "imei", value: s["imei"])
+            Divider().opacity(0.25).padding(.leading, 16)
+            secretRow("IMSI", key: "imsi", value: s["imsi"])
+            Divider().opacity(0.25).padding(.leading, 16)
+            secretRow("本机号码", key: "phone", value: phoneText)
         }
-        .padding(16)
-        .glassCard(radius: 22)
+        .glassCard(radius: 20)
     }
 
-    // MARK: 固件与档案
+    var phoneText: String {
+        let p = s["phone"]
+        return p.isEmpty ? "--" : p
+    }
 
-    private var firmwareCard: some View {
+    func secretRow(_ label: String, key: String, value: String) -> some View {
+        let on = revealed.contains(key)
+        return HStack {
+            Text(label)
+                .font(.system(size: 12.5))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value.isEmpty || value == "--" ? "--" : (on ? value : mask(value)))
+                .font(.system(size: 12.5, design: .monospaced))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Button {
+                Haptic.light()
+                if on { revealed.remove(key) } else { revealed.insert(key) }
+            } label: {
+                Image(systemName: on ? "eye.slash" : "eye")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+    }
+
+    /// 前3 + 点 + 后3
+    func mask(_ v: String) -> String {
+        guard v.count > 6 else { return v }
+        let head = String(v.prefix(3))
+        let tail = String(v.suffix(3))
+        return head + String(repeating: "·", count: min(9, max(3, v.count - 6))) + tail
+    }
+}
+
+// MARK: - WAN 与地址
+private extension HuaweiParamView {
+    var wanCard: some View {
         VStack(alignment: .leading, spacing: 0) {
-            cardTitle("固件与档案")
+            sectionTitle("WAN 与地址")
+            copyRow("LAN MAC 地址", value: s["mac"])
+            Divider().opacity(0.25).padding(.leading, 16)
+            copyRow("流量 WAN IP 地址", value: s["wanIP"])
+            Divider().opacity(0.25).padding(.leading, 16)
+            copyRow("流量 WAN IPv6 地址", value: s["wanIPv6"], multiline: true)
+            Divider().opacity(0.25).padding(.leading, 16)
+            copyRow("宽带 WAN IP 地址", value: "未知")
+            Divider().opacity(0.25).padding(.leading, 16)
+            copyRow("宽带 WAN IPv6 地址", value: "未知")
+        }
+        .glassCard(radius: 20)
+    }
 
-            kvRow("软件版本号", s["swver"].isEmpty ? "--" : s["swver"], copyable: true)
-            rowLine
+    func copyRow(_ label: String, value: String, multiline: Bool = false) -> some View {
+        HStack(alignment: .top) {
+            Text(label)
+                .font(.system(size: 12.5))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text(value.isEmpty ? "未知" : value)
+                .font(.system(size: 12.5, design: .monospaced))
+                .foregroundStyle(value.isEmpty ? Color.secondary : Color.primary)
+                .multilineTextAlignment(.trailing)
+                .lineLimit(multiline ? 2 : 1)
+            if !value.isEmpty {
+                Button {
+                    Haptic.success()
+                    UIPasteboard.general.string = value
+                    store.toast("已复制")
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+    }
+}
+
+// MARK: - 固件与档案
+private extension HuaweiParamView {
+    var firmwareCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionTitle("固件与档案")
+
+            HStack {
+                Text("软件版本号")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(s["swver"].isEmpty ? "--" : s["swver"])
+                    .font(.system(size: 12.5, design: .monospaced))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1).minimumScaleFactor(0.8)
+                Button {
+                    Haptic.success()
+                    UIPasteboard.general.string = s["swver"]
+                    store.toast("已复制")
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 12)
+
+            Divider().opacity(0.25).padding(.leading, 16)
 
             Button {
                 Haptic.light()
-                store.toast("硬件版本：" + (s["hwver"].isEmpty ? "--" : s["hwver"]), kind: .info)
+                showHardware = true
             } label: {
                 HStack(spacing: 10) {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.blue.opacity(0.14))
-                        .frame(width: 28, height: 28)
-                        .overlay(
-                            Image(systemName: "doc.text.magnifyingglass")
-                                .font(.system(size: 12))
-                                .foregroundStyle(.blue)
-                        )
+                    ZStack {
+                        Circle().fill(Color.blue.opacity(0.14)).frame(width: 28, height: 28)
+                        Image(systemName: "doc.text.magnifyingglass")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.blue)
+                    }
                     Text("版本档案")
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(.primary)
+                        .font(.system(size: 13.5))
                     Spacer()
                     Text(s["hwver"].isEmpty ? "--" : s["hwver"])
-                        .font(.system(size: 12))
+                        .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.secondary)
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.secondary.opacity(0.5))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary.opacity(0.6))
                 }
-                .padding(.vertical, 4)
+                .padding(.horizontal, 16).padding(.vertical, 11)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }
-        .padding(16)
-        .glassCard(radius: 22)
+        .glassCard(radius: 20)
     }
+}
 
-    // MARK: 进网标志
-
-    private var entryCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            cardTitle("进网标志")
+// MARK: - 进网标志
+private extension HuaweiParamView {
+    var certCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionTitle("进网标志")
 
             HStack {
                 Text("进网标志代码")
                     .font(.system(size: 12.5))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text(s["imei"].isEmpty ? "--" : entryCode)
-                    .font(.system(size: 12, weight: .medium))
-                    .textSelection(.enabled)
+                Text(certCode)
+                    .font(.system(size: 12.5, design: .monospaced))
+                    .foregroundStyle(.primary)
                 Button {
-                    Haptic.light()
-                    UIPasteboard.general.string = entryCode
-                    store.toast("已复制", kind: .success)
+                    Haptic.success()
+                    UIPasteboard.general.string = certCode
+                    store.toast("已复制进网标志")
                 } label: {
                     Image(systemName: "doc.on.doc")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary.opacity(0.7))
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
             }
+            .padding(.horizontal, 16).padding(.vertical, 12)
 
             Button {
                 Haptic.light()
-                if let u = URL(string: "https://imei.miit.gov.cn") {
+                if let u = URL(string: "https://jwxk.miit.gov.cn/") {
                     UIApplication.shared.open(u)
                 }
             } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: "seal")
+                    Image(systemName: "checkmark.seal")
                         .font(.system(size: 12))
                     Text("到工信部核验真伪")
                         .font(.system(size: 13, weight: .medium))
                 }
                 .foregroundStyle(.blue)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 11)
+                .frame(maxWidth: .infinity).frame(height: 42)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(Color.blue.opacity(0.10))
                 )
+                .padding(.horizontal, 16).padding(.bottom, 16)
             }
             .buttonStyle(.plain)
         }
-        .padding(16)
-        .glassCard(radius: 22)
+        .glassCard(radius: 20)
     }
 
-    private var entryCode: String {
-        // 华为进网标志代码 = 设备型号 + 序列号派生，设备没直接给时用 SN 尾部
-        let sn = s["sn"]
-        guard !sn.isEmpty else { return "--" }
-        return "5510464A1PC\(sn.suffix(8))TP55"
+    var certCode: String {
+        let c = s["certcode"]
+        return c.isEmpty ? "--" : c
     }
+}
 
-    // MARK: 调制与码流
+// MARK: - 调制与码流
+struct ModulationSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let status: CpeStatus
 
-    private var modulationSheet: some View {
+    var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 12) {
-                    modCard("上行", [
-                        ("MCS", s["ulmcs"]),
-                        ("层数", s["rank"]),
-                        ("发射功率", s["txpower"]),
-                        ("BLER", s["bler"])
-                    ])
-                    modCard("下行", [
-                        ("MCS", s["dlmcs"]),
-                        ("CQI", s["qci"]),
-                        ("层数", s["rank"])
-                    ])
-                    modCard("小区", [
-                        ("PCI", s["pci"]),
-                        ("NRARFCN", s["arfcn"]),
-                        ("TAC", s["tac"]),
-                        ("带宽", s["bw"])
-                    ])
+                    row("上行 MCS", status["ulmcs"])
+                    row("下行 MCS", status["dlmcs"])
+                    row("CQI0", status["qci"])
+                    row("Rank / 层数", status["rank"])
+                    row("BLER", status["bler"])
+                    row("发射功率", status["txpower"])
                 }
                 .padding(14)
             }
@@ -314,88 +394,69 @@ struct HuaweiParamView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("关闭") { showModulation = false }
+                    Button("完成") { dismiss() }
                 }
             }
         }
     }
 
-    private func modCard(_ title: String, _ rows: [(String, String)]) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            cardTitle(title)
-            ForEach(Array(rows.enumerated()), id: \.offset) { i, r in
-                if i > 0 { rowLine }
-                kvRow(r.0, r.1.isEmpty ? "--" : r.1)
-            }
-        }
-        .padding(16)
-        .glassCard(radius: 22)
-    }
-
-    // MARK: 组件
-
-    private func cardTitle(_ t: String) -> some View {
-        Text(t)
-            .font(.system(size: 15, weight: .bold))
-            .foregroundStyle(.primary)
-            .padding(.bottom, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var rowLine: some View {
-        Rectangle()
-            .fill(Color.primary.opacity(0.06))
-            .frame(height: 1)
-    }
-
-    private func kvRow(_ k: String, _ v: String,
-                       field: String? = nil, copyable: Bool = false) -> some View {
-        HStack(spacing: 10) {
+    func row(_ k: String, _ v: String) -> some View {
+        HStack(alignment: .top) {
             Text(k)
-                .font(.system(size: 12.5))
+                .font(.system(size: 13))
                 .foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            Text(v)
-                .font(.system(size: 12.5, weight: .medium))
+            Spacer(minLength: 10)
+            Text(v.isEmpty ? "--" : v)
+                .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.trailing)
-                .textSelection(.enabled)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity)
+        .glassCard(radius: 14)
+    }
+}
 
-            if let f = field {
-                Button {
-                    Haptic.light()
-                    UIPasteboard.general.string = s[f]
-                    store.toast("已复制", kind: .success)
-                } label: {
-                    Image(systemName: "eye")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary.opacity(0.7))
+// MARK: - 版本档案
+struct HardwareSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let status: CpeStatus
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 12) {
+                    row("硬件版本", status["hwver"])
+                    row("软件版本", status["swver"])
+                    row("网页版本", status["webver"])
+                    row("设备型号", status["model"])
+                    row("序列号", status["sn"])
                 }
-                .buttonStyle(.plain)
-                .onTapGesture {
-                    if revealed.contains(f) { revealed.remove(f) } else { revealed.insert(f) }
+                .padding(14)
+            }
+            .background(GlassListBackground())
+            .navigationTitle("版本档案")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成") { dismiss() }
                 }
-            } else if copyable && v != "--" {
-                Button {
-                    Haptic.light()
-                    UIPasteboard.general.string = v
-                    store.toast("已复制", kind: .success)
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary.opacity(0.7))
-                }
-                .buttonStyle(.plain)
             }
         }
-        .padding(.vertical, 7)
     }
 
-    private var netModeText: String {
-        switch s["netmode"] {
-        case "3": return "5G"
-        case "2": return "4G"
-        default:  return s["netmode"].isEmpty ? "--" : s["netmode"]
+    func row(_ k: String, _ v: String) -> some View {
+        HStack {
+            Text(k)
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(v.isEmpty ? "--" : v)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.primary)
         }
+        .padding(14)
+        .frame(maxWidth: .infinity)
+        .glassCard(radius: 14)
     }
 }
