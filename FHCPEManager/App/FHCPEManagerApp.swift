@@ -201,7 +201,8 @@ struct MainTabView: View {
                 case 2: ControlTab()
                 case 3: LockTab()
                 case 4: ParamTab()
-                default: SettingsView()
+                default:
+                    if store.isHuawei { HuaweiSettingsView() } else { SettingsView() }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
