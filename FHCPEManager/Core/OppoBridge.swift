@@ -745,4 +745,45 @@ extension OppoBridge: WKNavigationDelegate {
 private struct OppoAnyBox: @unchecked Sendable {
     let value: Any?
     init(_ v: Any?) { value = v }
+
+    /// 通过页面 $request 发 POST
+    func post(_ alias: String, _ body: [String: Any] = [:]) async -> [String: Any] {
+        let bs = (try? JSONSerialization.data(withJSONObject: body))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        let tok = "alias_" + alias + "_" + String(Int(Date().timeIntervalSince1970 * 1000))
+        let key = jsEscape(tok)
+        let al = jsEscape(alias)
+
+        let js = """
+        (function(){
+          try {
+            var app = document.querySelector('#app');
+            var gp = app && app.__vue_app__ && app.__vue_app__.config.globalProperties;
+            var R = gp && gp.$request;
+            if (!R) return JSON.stringify({__err:'NO_REQUEST'});
+            window.__oppoRes = window.__oppoRes || {};
+            window.__oppoRes['\(key)'] = '';
+            R.$post('\(al)', \(bs)).then(function(r){
+              window.__oppoRes['\(key)'] =
+                JSON.stringify((r && r.response !== undefined) ? r.response : (r || {}));
+            }).catch(function(e){
+              window.__oppoRes['\(key)'] = JSON.stringify({__err:String(e && e.message)});
+            });
+            return 'kicked';
+          } catch(e) { return JSON.stringify({__err:'EXC'}); }
+        })()
+        """
+        _ = await evalSync(js, timeout: 3)
+        for _ in 0..<20 {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            let probe = "window.__oppoRes && window.__oppoRes['\(key)'] || ''"
+            if let r = await evalSync(probe) as? String,
+               !r.isEmpty,
+               let d = r.data(using: .utf8),
+               let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+                return o
+            }
+        }
+        return ["__err": "timeout"]
+    }
 }
