@@ -215,7 +215,10 @@ final class HuaweiAPI {
         // 华为的请求全部要加密，改由页面自己的 $request 代发
         let ok = await HuaweiBridge.shared.login(host: host, user: user, password: password)
         guard ok else {
-            throw HuaweiError.http(401)
+            let reason = HuaweiBridge.shared.lastError ?? "无法连接设备"
+            lastErrorText = reason
+            throw NSError(domain: "Huawei", code: 401,
+                          userInfo: [NSLocalizedDescriptionKey: reason])
         }
         loggedIn = true
     }
