@@ -245,6 +245,24 @@ final class HuaweiAPI {
         "deviceInformation": "/api/device/information",
         "convergedStatus": "/api/monitoring/converged-status",
         "smsCount": "/api/sms/sms-count",
+        "homeDataSwitch": "/api/dialup/mobile-dataswitch",
+        "ipv6Enable": "/api/ntwk/ipv6-enable",
+        "dualWanInfo": "/api/ntwk/dualwaninfo",
+        "lockFreq": "/api/net/lock-freq",
+        "nbrcellinfo": "/api/device/nbrcellinfo",
+        "seccellinfo": "/api/device/seccellinfo",
+        "clearTraffic": "/api/monitoring/clear-traffic",
+        "ledCtrl": "/api/led/appctrlled",
+        "circleSwitch": "/api/led/circle-switch",
+        "appTurbo": "/api/appturbo/control",
+        "appTurboList": "/api/appturbo/acc-list",
+        "netModeList": "/api/net/net-mode-list",
+        "antennaType": "/api/device/antenna_type",
+        "wlanBasic": "/api/wlan/basic-settings",
+        "autoUpdate": "/api/online-update/configuration",
+        "upgStatus": "/api/online-update/status",
+        "timeReboot": "/api/diagnosis/time_reboot",
+        "hostInfo": "/api/system/HostInfo",
     ]
 
     /// 取数据：全部走页面通道（自带加密）
@@ -454,6 +472,8 @@ final class HuaweiAPI {
             put("nrearfcn", "arfcn")
             put("pci", "pci")
             put("cell_id", "cellid")
+            put("plmn", "plmn")
+            put("tac", "tac")
             put("nrcqi0", "qci")
             put("tac", "tac")
 
@@ -552,6 +572,8 @@ final class HuaweiAPI {
         if let t = di["WanIPAddress"] as? String, !t.isEmpty { v["wanIP"] = t }
         if let t = di["WanIPv6Address"] as? String, !t.isEmpty { v["wanIPv6"] = t }
         if let t = di["WebUIVersion"] as? String, !t.isEmpty { v["webver"] = t }
+        // 进网标志代码（部分固件放在 certcode，缺失则用序列号兜底展示）
+        if let t = di["CertCode"] as? String, !t.isEmpty { v["certcode"] = t }
         if let t = di["DeviceType"] as? String { v["deviceType"] = t }
 
         // 设备扩展信息（硬件版本等）
