@@ -31,6 +31,11 @@ struct RootView: View {
             // OPPO CPE 的会话宿主
             // WebKit 规则：视图必须「在窗口内」且 alpha > 0，否则暂停 JS。
             // 所以：放在左下角、尺寸小、不加 opacity、不用 offset 移出屏幕。
+            // 华为 CPE 的会话宿主
+            HuaweiHost()
+                .frame(width: 2, height: 2)
+                .allowsHitTesting(false)
+
             OppoHost()
                 .frame(width: 2, height: 2)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
@@ -137,6 +142,17 @@ struct BridgeHost: UIViewRepresentable {
 }
 
 /// 把 OPPO 的 WKWebView 挂到 SwiftUI 视图树里
+/// 把华为的 WKWebView 挂到视图树里
+struct HuaweiHost: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView()
+        v.backgroundColor = .clear
+        HuaweiBridge.shared.attach(to: v)
+        return v
+    }
+    func updateUIView(_ uiView: UIView, context: Context) {}
+}
+
 struct OppoHost: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let v = UIView()
