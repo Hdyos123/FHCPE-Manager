@@ -620,7 +620,7 @@ final class HuaweiBridge: NSObject, ObservableObject {
           var gp = app && app.__vue_app__ && app.__vue_app__.config.globalProperties;
           var R = gp && gp.$request;
           if (!R) { return JSON.stringify({__err:'NO_REQUEST'}); }
-          return R.$get('\(jsEscape(alias))', {}).then(function(r){
+          return R.$get('\(jsEscape(Self.realPath(alias)))', {}).then(function(r){
             if (r && r.error) { return JSON.stringify({__err:String(r.error.code||'?')}); }
             var o = r && r.response !== undefined ? r.response : r;
             return JSON.stringify(o || {});
@@ -639,7 +639,7 @@ final class HuaweiBridge: NSObject, ObservableObject {
             var R = gp && gp.$request;
             window.__hwRes = window.__hwRes || {};
             if (!R) { window.__hwRes['\(tok)'] = JSON.stringify({__err:'NO_REQUEST'}); return 'kicked'; }
-            R.$get('\(jsEscape(alias))', {}).then(function(r){
+            R.$get('\(jsEscape(Self.realPath(alias)))', {}).then(function(r){
               var out;
               if (r && r.error) out = {__err: String(r.error.code||'?')};
               else {
@@ -661,8 +661,8 @@ final class HuaweiBridge: NSObject, ObservableObject {
 
         // 轮询：0.15 秒一次，最多 3 秒
         var s: String? = nil
-        for _ in 0..<20 {
-            try? await Task.sleep(nanoseconds: 150_000_000)
+        for _ in 0..<25 {
+            try? await Task.sleep(nanoseconds: 80_000_000)
             if let r = await evalSync("window.__hwRes && window.__hwRes['\(tok)'] || ''") as? String,
                !r.isEmpty {
                 s = r
@@ -705,7 +705,7 @@ final class HuaweiBridge: NSObject, ObservableObject {
             var R = gp && gp.$request;
             window.__hwRes = window.__hwRes || {};
             if (!R) { window.__hwRes['\(tok)'] = JSON.stringify({__err:'NO_REQUEST'}); return 'kicked'; }
-            R.$post('\(jsEscape(alias))', \(bs)).then(function(r){
+            R.$post('\(jsEscape(Self.realPath(alias)))', \(bs)).then(function(r){
               var out;
               if (r && r.error) out = {__err: String(r.error.code||'?')};
               else {
@@ -726,8 +726,8 @@ final class HuaweiBridge: NSObject, ObservableObject {
         _ = await evalSync(kick, timeout: 3)
 
         var s: String? = nil
-        for _ in 0..<20 {
-            try? await Task.sleep(nanoseconds: 150_000_000)
+        for _ in 0..<25 {
+            try? await Task.sleep(nanoseconds: 80_000_000)
             if let r = await evalSync("window.__hwRes && window.__hwRes['\(tok)'] || ''") as? String,
                !r.isEmpty {
                 s = r
@@ -754,7 +754,7 @@ final class HuaweiBridge: NSObject, ObservableObject {
               var gp = app && app.__vue_app__ && app.__vue_app__.config.globalProperties;
               var R = gp && gp.$request;
               if (!R) { resolve('{"__err":"NO_REQUEST"}'); return; }
-              R.$get('\(jsEscape(alias))', {}).then(function(r){
+              R.$get('\(jsEscape(Self.realPath(alias)))', {}).then(function(r){
                 if (r && r.error) { resolve('{"__err":"' + (r.error.code||'?') + '"}'); return; }
                 var o = r && r.response !== undefined ? r.response : r;
                 if (Array.isArray(o)) { resolve(JSON.stringify({__list:o})); return; }
@@ -1064,8 +1064,8 @@ extension HuaweiBridge: WKNavigationDelegate {
         _ = await evalSync(kick, timeout: 3)
 
         var raw: String? = nil
-        for _ in 0..<40 {
-            try? await Task.sleep(nanoseconds: 150_000_000)
+        for _ in 0..<30 {
+            try? await Task.sleep(nanoseconds: 80_000_000)
             if let r = await evalSync("window.__hwRes && window.__hwRes['\(tok)'] || ''") as? String,
                !r.isEmpty {
                 raw = r
@@ -1215,7 +1215,7 @@ extension HuaweiBridge: WKNavigationDelegate {
             var R = gp && gp.$request;
             window.__hwRes = window.__hwRes || {};
             if (!R) { window.__hwRes['\(tok)'] = 'NO_REQUEST'; return 'x'; }
-            R.$get('\(jsEscape(alias))', {}).then(function(r){
+            R.$get('\(jsEscape(Self.realPath(alias)))', {}).then(function(r){
               if (r && r.error) {
                 window.__hwRes['\(tok)'] = 'ERR:' + r.error.code;
                 return;
