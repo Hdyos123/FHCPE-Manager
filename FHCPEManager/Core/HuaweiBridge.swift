@@ -412,18 +412,21 @@ final class HuaweiBridge: NSObject, ObservableObject {
               });
             }
             """)
+            var inputs = -1
+            var hashNow = "?"
             if let s = st as? String,
                let d = s.data(using: .utf8),
-               let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-               let n = o["inputs"] as? Int, n >= 2 {
+               let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+                inputs = o["inputs"] as? Int ?? -1
+                hashNow = (o["hash"] as? String) ?? "?"
+            }
+            if inputs >= 2 {
                 ok = true
-                log("② 登录框就绪 \(i/2)s · hash=\(o["hash"] ?? "?")")
+                log("② 登录框就绪 \(i/2)s · hash=\(hashNow)")
                 break
             }
             if i % 10 == 0 {
-                log("  等待登录框 \(i/2)s · inputs=\(st.flatMap { ($0 as? String).map { s in
-                    (try? JSONSerialization.jsonObject(with: Data(s.utf8))) as? [String: Any]
-                } ?? nil }?["inputs"] ?? "?")")
+                log("  等待登录框 \(i/2)s · inputs=\(inputs) · hash=\(hashNow)")
             }
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
