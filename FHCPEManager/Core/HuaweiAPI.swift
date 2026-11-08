@@ -215,6 +215,8 @@ final class HuaweiAPI {
         // ① 先试复用上次的会话（免登录，通常 1 秒内）
         if await HuaweiBridge.shared.tryRestoreSession(host: host) {
             loggedIn = true
+            // 顺手进开发者模式（解锁小区列表）
+            _ = await HuaweiBridge.shared.enterDeveloperMode(password: password)
             return
         }
 
@@ -227,6 +229,8 @@ final class HuaweiAPI {
                           userInfo: [NSLocalizedDescriptionKey: reason])
         }
         loggedIn = true
+        // 登录成功后进开发者模式，解锁小区列表
+        _ = await HuaweiBridge.shared.enterDeveloperMode(password: password)
     }
 
     /// 别名 → 路径
@@ -453,6 +457,7 @@ final class HuaweiAPI {
             put("pci", "pci")
             put("cell_id", "cellid")
             put("nrcqi0", "qci")
+            put("tac", "tac")
 
             // 频段形如 "100MHz@627264(N78)"
             if let band = sig["bandInfo"] as? String, !band.isEmpty {
@@ -533,8 +538,15 @@ final class HuaweiAPI {
         if let t = di["Imsi"] as? String { v["imsi"] = t }
         if let t = di["Iccid"] as? String { v["iccid"] = t }
         if let t = di["HardwareVersion"] as? String { v["hwver"] = t }
-        if let t = di["SoftwareVersion"] as? String { v["swver"] = t }
+        if let t = di["SoftwareVersion"] as? String {
+            v["swver"] = t.replacingOccurrences(of: "&#40;", with: "(")
+                              .replacingOccurrences(of: "&#41;", with: ")")
+        }
         if let t = di["MacAddress1"] as? String { v["mac"] = t }
+        if let t = di["Msisdn"] as? String, !t.isEmpty { v["phone"] = t }
+        if let t = di["WanIPAddress"] as? String, !t.isEmpty { v["wanIP"] = t }
+        if let t = di["WanIPv6Address"] as? String, !t.isEmpty { v["wanIPv6"] = t }
+        if let t = di["WebUIVersion"] as? String, !t.isEmpty { v["webver"] = t }
         if let t = di["DeviceType"] as? String { v["deviceType"] = t }
 
         // 设备扩展信息（硬件版本等）
@@ -804,9 +816,66 @@ final class HuaweiAPI {
     }
 
     /// 邻区列表
-    func fetchNeighborCells() async -> [(band: String, pci: String, freq: String, rsrp: String)] {
-        // H153 固件未开放 nbrcellinfo
-        return []
+    /// 小区条目
+    struct CellEntry: Identifiable {
+        let id = UUID()
+        var band: String     // N78 / B3
+        var pci: String
+        var arfcn: String
+        var rsrp: String
+        var rsrq: String
+        var rssi: String
+        var sinr: String
+        var bw: String       // 带宽，仅服务小区有
+        var rsrpValue: Double { Double(rsrp) ?? -140 }
+    }
+
+    /// 邻区列表
+    /// nbrcellinfo 返回格式：`ARFCN,频段,PCI,RSRP,RSRQ,RSSI,SINR;` 多组用 ; 分隔
+    func fetchNeighborCells() async -> [CellEntry] {
+        guard let raw = await HuaweiBridge.shared.getRaw("nbrcellinfo") else { return [] }
+        return Self.parseCellList(raw, hasBandwidth: false).map { c in
+            CellEntry(band: c.band, pci: c.pci, arfcn: c.freq,
+                      rsrp: c.rsrp, rsrq: c.rsrq, rssi: c.rssi,
+                      sinr: c.sinr, bw: "")
+        }
+    }
+
+    /// 服务小区
+
+    /// 解析小区列表字符串
+    static func parseCellList(_ raw: String, hasBandwidth: Bool)
+        -> [(band: String, pci: String, freq: String, rsrp: String,
+            rsrq: String, rssi: String, sinr: String, bw: String)] {
+
+        // 取出 xml 里的内容（可能是 <nbrcell_nrlist>...</nbrcell_nrlist>）
+        var body = raw
+        if let m = raw.range(of: "nrlist>") ?? raw.range(of: "nrseccell_list>") {
+            var s = String(raw[m.upperBound...])
+            if let e = s.range(of: "</") { s = String(s[..<e.lowerBound]) }
+            body = s
+        }
+
+        var out: [(String, String, String, String, String, String, String, String)] = []
+        for seg in body.components(separatedBy: ";") {
+            let f = seg.components(separatedBy: ",").map {
+                $0.trimmingCharacters(in: .whitespaces)
+            }
+            guard f.count >= 4 else { continue }
+            if hasBandwidth {
+                // ARFCN,Band,带宽,PCI,RSRP,RSRQ,RSSI,SINR
+                guard f.count >= 8 else { continue }
+                out.append((f[1], f[3], f[0],
+                            cleanUnit(f[4]), cleanUnit(f[5]), cleanUnit(f[6]), cleanUnit(f[7]),
+                            f[2]))
+            } else {
+                // ARFCN,Band,PCI,RSRP,RSRQ,RSSI,SINR
+                guard f.count >= 7 else { continue }
+                out.append((f[1], f[2], f[0],
+                            cleanUnit(f[3]), cleanUnit(f[4]), cleanUnit(f[5]), cleanUnit(f[6]), ""))
+            }
+        }
+        return out
     }
 
     // MARK: 工具
