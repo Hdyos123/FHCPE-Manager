@@ -171,6 +171,16 @@ final class CpeStore: ObservableObject {
         defer { isLoading = false }
 
         clearAll()
+
+        // 先试已有会话（WKWebsiteDataStore 会持久化 Cookie）
+        if await OppoBridge.shared.tryRestore(host: profile.host) {
+            ProfileStore.upsert(profile)
+            ProfileStore.activeID = profile.id
+            isLoggedIn = true
+            await fetchStatus()
+            return true
+        }
+
         let ok = await OppoBridge.shared.login(host: profile.host,
                                                user: profile.user,
                                                password: profile.password)
@@ -370,9 +380,9 @@ final class CpeStore: ObservableObject {
     func fetchStatus() async {
         // 华为：明文 XML 接口
         if isHuawei {
-            // 慢变数据（信号/设备信息/本月）：每 5 秒
+            // 慢变数据（信号/设备信息/本月）：每 10 秒（批量请求，耗时较长）
             var v = hwSlowCache
-            if Date().timeIntervalSince(hwSlowAt) > 5 || v.isEmpty {
+            if Date().timeIntervalSince(hwSlowAt) > 10 || v.isEmpty {
                 let d = await HuaweiAPI.shared.fetchOverview()
                 if !d.isEmpty {
                     v = d
@@ -1088,26 +1098,36 @@ final class CpeStore: ObservableObject {
 
     /// 带 10 秒硬超时的状态刷新，并防止请求叠加
     private func fetchStatusGuarded() async {
+        // 上一轮还没结束就跳过（防叠加）
         if inFlightWork != nil { return }
+
+        // 华为批量取数较慢，给更宽的窗口
+        let limit: TimeInterval = isHuawei ? 25 : 12
 
         let work = Task { @MainActor in await self.fetchStatus() }
         inFlightWork = work
-        let timer = Task { try? await Task.sleep(nanoseconds: 10_000_000_000) }
 
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask { await work.value }
-            group.addTask { await timer.value }
-            await group.next()
+        let timer = Task { try? await Task.sleep(nanoseconds: UInt64(limit * 1_000_000_000)) }
+
+        var timedOut = false
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                await work.value
+                return false
+            }
+            group.addTask { _ = await timer.value; return true }
+            timedOut = await group.next() ?? false
             group.cancelAll()
         }
         timer.cancel()
-        work.cancel()
-        inFlightWork = nil
 
-        // 超时后计一次失败，让重登逻辑感知
-        if Date().timeIntervalSince(lastTick) >= 10 {
+        if timedOut {
+            work.cancel()
             failStreak += 1
+            // 超时后保留 inFlightWork 一段时间，防止立刻重启造成雪崩
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
+        inFlightWork = nil
     }
 
     func stopPolling() {
