@@ -353,13 +353,14 @@ final class HuaweiBridge: NSObject, ObservableObject {
         let wv = WKWebView(frame: .zero, configuration: cfg)
         wv.navigationDelegate = self
         // 不能为 0，否则 WebKit 暂停 JS 执行
-        wv.alpha = 0.02
+        wv.alpha = 0.01
         wv.isUserInteractionEnabled = false
         view.addSubview(wv)
         wv.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            wv.widthAnchor.constraint(equalToConstant: 2),
-            wv.heightAnchor.constraint(equalToConstant: 2),
+            // 尺寸不能太小：Element Plus 按钮点击依赖布局计算
+            wv.widthAnchor.constraint(equalToConstant: 200),
+            wv.heightAnchor.constraint(equalToConstant: 200),
             wv.topAnchor.constraint(equalTo: view.topAnchor),
             wv.leadingAnchor.constraint(equalTo: view.leadingAnchor)
         ])
@@ -496,10 +497,21 @@ final class HuaweiBridge: NSObject, ObservableObject {
                     return t === '登录' || /^login$/i.test(t);
                   })[0];
                 if (btn) {
-                  window.__btnCheck = 'disabled=' + btn.disabled + ' text=' + (btn.textContent||'').trim();
-                  btn.click();
-                  // 登录成功后页面会重载，这里只等 3 秒
-                  setTimeout(function(){ resolve(location.hash); }, 3000);
+                  window.__btnCheck = 'disabled=' + btn.disabled
+                    + ' text=' + (btn.textContent||'').trim();
+                  // 关键：用完整鼠标事件序列触发。
+                  // 直接 .click() 在 WKWebView 小尺寸视图里可能不生效
+                  try {
+                    btn.focus();
+                    btn.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, cancelable:true, view:window}));
+                    btn.dispatchEvent(new MouseEvent('mouseup',   {bubbles:true, cancelable:true, view:window}));
+                    btn.dispatchEvent(new MouseEvent('click',     {bubbles:true, cancelable:true, view:window}));
+                    btn.click();
+                  } catch(e) {
+                    btn.click();
+                  }
+                  // 登录成功后页面会重载，等 4 秒
+                  setTimeout(function(){ resolve(location.hash); }, 4000);
                 } else {
                   resolve('NO_BUTTON');
                 }
