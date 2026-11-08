@@ -1,18 +1,20 @@
 import SwiftUI
 
-/// 华为控制页
+/// 华为控制页 —— 照 CPE Ultra 布局
 struct HuaweiControlView: View {
     @EnvironmentObject var store: CpeStore
 
-    @State private var mobileData = true
+    @State private var dataOn = true
+    @State private var ipv6On = false
+    @State private var turboOn = false
+    @State private var failoverOn = false
+    @State private var turboEngine = false
     @State private var ledOn = true
-    @State private var timedReboot = false
-    @State private var startTime = "03:00"
-    @State private var endTime = "04:00"
+    @State private var ambientOn = false
     @State private var busy = false
-    @State private var showReboot = false
-    @State private var showFactory = false
-    @State private var showTimed = false
+    @State private var partialWarn = false
+    @State private var dualWan: [String: Any] = [:]
+    @State private var hostCount = 0
 
     private var s: CpeStatus { store.status }
 
@@ -20,266 +22,425 @@ struct HuaweiControlView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 12) {
-                    statusBanner
                     mobileDataCard
-                    quickActions
-                    turboCard
-                    wanCard
-                    wanBindCard
-                    timedRebootCard
-                    upgradeCard
+
+                    if partialWarn {
+                        warnBar
+                    }
+
+                    turboEngineCard
+                    dualWanCard
+                    ambientCard
+                    vpnCard
                 }
-                .padding(.horizontal, 14)
-                .padding(.top, 8)
-                .padding(.bottom, 30)
+                .padding(.horizontal, 12)
+                .padding(.top, 6)
+                .padding(.bottom, 96)
             }
-            .scrollContentBackground(.hidden)
             .background(GlassListBackground())
-            .navigationTitle("控制")
-            .alert("重启设备", isPresented: $showReboot) {
-                Button("取消", role: .cancel) { }
-                Button("重启", role: .destructive) {
-                    Haptic.warning()
-                    Task {
-                        let ok = await HuaweiAPI.shared.reboot()
-                        store.toast(ok ? "重启指令已发送，设备将在约 1 分钟后恢复"
-                                       : (HuaweiAPI.shared.lastErrorText.isEmpty ? "重启失败" : HuaweiAPI.shared.lastErrorText),
-                                    kind: ok ? .success : .error)
-                    }
+            .navigationBarHidden(true)
+            .refreshable { await reload() }
+            .task { await reload() }
+        }
+    }
+
+    // MARK: 移动数据大卡
+
+    private var mobileDataCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 5) {
+                Image(systemName: "antenna.radiowaves.left.and.right")
+                    .font(.system(size: 11))
+                Text("移动数据")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundStyle(.blue)
+
+            Text(netModeText)
+                .font(.system(size: 38, weight: .bold, design: .rounded))
+                .foregroundStyle(.primary)
+
+            Text(s.carrierName + " · " + (s["regstatus"] == "0" ? "蜂窝上行正常" : "未联网"))
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 10) {
+                bigTile("移动数据", dataOn ? "已联网" : "已关闭",
+                        icon: "antenna.radiowaves.left.and.right",
+                        tint: Color(red: 0.38, green: 0.62, blue: 1.0),
+                        filled: dataOn) {
+                    Task { await toggleData() }
                 }
-            } message: {
-                Text("重启期间所有终端会断网。")
-            }
-            .alert("恢复出厂设置", isPresented: $showFactory) {
-                Button("取消", role: .cancel) { }
-                Button("恢复", role: .destructive) {
-                    Haptic.warning()
-                    Task {
-                        let ok = await HuaweiAPI.shared.factoryReset()
-                        store.toast(ok ? "恢复出厂指令已下发" : "操作失败",
-                                    kind: ok ? .success : .error)
-                    }
-                }
-            } message: {
-                Text("名称、密码、锁频等全部配置都会清空，且无法撤销。")
-            }
-            .sheet(isPresented: $showTimed) { timedSheet }
-            .task { loadState() }
-        }
-    }
-
-    // MARK: 状态
-
-    internal var statusBanner: some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(s["connStatus"] == "901" ? Color.green : Color.orange)
-                .frame(width: 8, height: 8)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(s["carrier"].isEmpty ? "未识别运营商" : s["carrier"])
-                    .font(.system(size: 14, weight: .semibold))
-                Text(netText)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            if !s["rsrp"].isEmpty {
-                Text("\(s["rsrp"]) dBm")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(14)
-        .glassCard(radius: 16)
-    }
-
-    private var netText: String {
-        let t = s["netmode"]
-        switch t {
-        case "3": return "5G"
-        case "2": return "4G"
-        default:  return t.isEmpty ? "未知网络" : t
-        }
-    }
-
-    // MARK: 移动数据
-
-    internal var mobileDataCard: some View {
-        Button {
-            Haptic.medium()
-            let target = !mobileData
-            mobileData = target
-            Task {
-                busy = true
-                let ok = await HuaweiAPI.shared.setMobileData(target)
-                busy = false
-                if !ok {
-                    mobileData = !target
-                    store.toast("设置失败", kind: .error)
-                } else {
-                    store.toast(target ? "移动数据已开启" : "移动数据已关闭", kind: .success)
+                bigTile("IPv6", ipv6On ? "双栈" : "已关闭",
+                        icon: "6.circle.fill",
+                        tint: Color(red: 0.68, green: 0.55, blue: 1.0),
+                        filled: ipv6On) {
+                    Task { await toggleIPv6() }
                 }
             }
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: mobileData ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(mobileData ? Color.blue : Color.secondary)
-                    .frame(width: 40, height: 40)
-                    .background(Circle().fill((mobileData ? Color.blue : Color.secondary).opacity(0.12)))
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("移动数据")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.primary)
-                    Text(mobileData ? "已开启，可正常上网" : "已关闭，仅局域网可用")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                if busy {
-                    ProgressView().scaleEffect(0.8)
-                } else {
-                    Text(mobileData ? "开" : "关")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 9).padding(.vertical, 4)
-                        .background(Capsule().fill(mobileData ? Color.green : Color.secondary.opacity(0.5)))
-                }
-            }
-            .padding(14)
-            .glassCard(radius: 18)
         }
-        .buttonStyle(.plain)
-        .disabled(busy)
+        .padding(16)
+        .glassCard(radius: 22)
     }
 
-    // MARK: 快捷操作
-
-    internal var quickActions: some View {
-        HStack(spacing: 10) {
-            actionCard("重启设备", "power", .red) {
-                showReboot = true
-            }
-            actionCard("恢复出厂", "arrow.counterclockwise", .orange) {
-                showFactory = true
-            }
-        }
-    }
-
-    private func actionCard(_ title: String, _ icon: String, _ tint: Color,
-                            action: @escaping () -> Void) -> some View {
-        Button {
-            Haptic.warning()
-            action()
-        } label: {
-            VStack(spacing: 8) {
-                Image(systemName: icon)
-                    .font(.system(size: 19, weight: .medium))
-                    .foregroundStyle(tint)
-                Text(title)
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(.primary.opacity(0.85))
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 78)
-            .glassCard(radius: 18)
-        }
-        .buttonStyle(.plain)
-    }
-
-    // MARK: 定时重启
-
-    internal var timedRebootCard: some View {
+    private func bigTile(_ title: String, _ value: String, icon: String,
+                         tint: Color, filled: Bool,
+                         action: @escaping () -> Void) -> some View {
         Button {
             Haptic.light()
-            showTimed = true
+            action()
         } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.purple)
-                    .frame(width: 38, height: 38)
-                    .background(Circle().fill(Color.purple.opacity(0.12)))
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("定时重启")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.primary)
-                    Text(timedReboot ? "\(startTime) – \(endTime)" : "未开启")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 8) {
+                ZStack {
+                    Circle()
+                        .fill(filled ? Color.white.opacity(0.22) : tint.opacity(0.16))
+                        .frame(width: 36, height: 36)
+                    Image(systemName: icon)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(filled ? .white : tint)
                 }
-
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.secondary.opacity(0.5))
+                Spacer(minLength: 0)
+                Text(title)
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .foregroundStyle(filled ? .white : .primary)
+                Text(value)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(filled ? Color.white.opacity(0.85) : Color.secondary)
             }
-            .padding(14)
-            .glassCard(radius: 18)
+            .padding(13)
+            .frame(maxWidth: .infinity, minHeight: 120, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(filled
+                          ? AnyShapeStyle(tint.gradient)
+                          : AnyShapeStyle(Color.primary.opacity(0.05)))
+            )
         }
         .buttonStyle(.plain)
     }
 
-    private var timedSheet: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    Toggle("启用定时重启", isOn: $timedReboot)
-                }
-                Section {
-                    HStack {
-                        Text("开始时间")
-                        Spacer()
-                        TextField("03:00", text: $startTime)
-                            .multilineTextAlignment(.trailing)
-                            .keyboardType(.numbersAndPunctuation)
-                    }
-                    HStack {
-                        Text("结束时间")
-                        Spacer()
-                        TextField("04:00", text: $endTime)
-                            .multilineTextAlignment(.trailing)
-                            .keyboardType(.numbersAndPunctuation)
-                    }
-                } header: {
-                    Text("时间窗")
-                } footer: {
-                    Text("在指定时间窗内自动重启一次。格式 HH:mm，开始时间需早于结束时间。")
-                }
+    // MARK: 警告条
+
+    private var warnBar: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(Color.orange.opacity(0.15))
+                .frame(width: 32, height: 32)
+                .overlay(
+                    Image(systemName: "exclamationmark.circle")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.orange)
+                )
+            VStack(alignment: .leading, spacing: 2) {
+                Text("部分状态没能读回来")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("游戏加速、氛围灯没能读回来。下拉刷新可重试。")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
             }
-            .navigationTitle("定时重启")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { showTimed = false }
+            Spacer()
+        }
+        .padding(12)
+        .glassCard(radius: 18)
+    }
+
+    // MARK: 应用加速
+
+    private var turboEngineCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("应用加速")
+                .font(.system(size: 15, weight: .bold))
+
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("加速引擎")
+                        .font(.system(size: 13.5, weight: .medium))
+                    Text("关闭后所有终端平等排队")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") {
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { turboEngine },
+                    set: { v in
+                        turboEngine = v
+                        Haptic.medium()
                         Task {
-                            let ok = await HuaweiAPI.shared.setTimedReboot(
-                                enable: timedReboot, start: startTime, end: endTime)
-                            store.toast(ok ? "定时重启已保存" : "保存失败",
+                            let ok = await HuaweiAPI.shared.setTurbo(enabled: v, scene: 0, devices: [])
+                            store.toast(ok ? "已" + (v ? "开启" : "关闭") : "设置失败",
                                         kind: ok ? .success : .error)
-                            showTimed = false
                         }
                     }
-                }
+                ))
+                .labelsHidden()
+                .tint(.green)
             }
+        }
+        .padding(16)
+        .glassCard(radius: 22)
+    }
+
+    // MARK: 双宽带 Turbo
+
+    private var dualWanCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("双宽带 Turbo")
+                    .font(.system(size: 15, weight: .bold))
+                Spacer()
+                Text("网线已连接")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.green)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Capsule().fill(Color.green.opacity(0.14)))
+            }
+
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("双通道聚合")
+                        .font(.system(size: 13.5, weight: .medium))
+                    Text("宽带与 SIM 卡同时上行，带宽叠加")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Toggle("", isOn: $turboOn)
+                    .labelsHidden().tint(.green)
+            }
+
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("断线自动切换")
+                        .font(.system(size: 13.5, weight: .medium))
+                    Text("一路断开时自动把流量并到另一路")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Toggle("", isOn: $failoverOn)
+                    .labelsHidden().tint(.blue)
+            }
+
+            HStack(spacing: 10) {
+                wanBox("宽带下行", "0", .blue)
+                wanBox("宽带上行", "0", .orange)
+            }
+
+            Button {
+                Haptic.light()
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "cable.connector")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 30, height: 30)
+                        .background(Circle().fill(Color.primary.opacity(0.06)))
+                    Text("宽带链路")
+                        .font(.system(size: 13))
+                    Spacer()
+                    Text(ethRate)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary.opacity(0.5))
+                }
+                .padding(10)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.primary.opacity(0.04))
+                )
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(16)
+        .glassCard(radius: 22)
+    }
+
+    private var ethRate: String {
+        if let r = dualWan["ethwanrate"] as? String, !r.isEmpty { return r }
+        return "1000 Mbps"
+    }
+
+    private func wanBox(_ title: String, _ value: String, _ color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline, spacing: 2) {
+                Text(value)
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .foregroundStyle(color)
+                Text("Mbps")
+                    .font(.system(size: 9))
+                    .foregroundStyle(color.opacity(0.6))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(11)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.primary.opacity(0.04))
+        )
+    }
+
+    // MARK: 氛围灯
+
+    private var ambientCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("氛围灯")
+                .font(.system(size: 15, weight: .bold))
+
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("指示灯")
+                        .font(.system(size: 13.5, weight: .medium))
+                    Text(ledOn ? "正常显示" : "全部熄灭")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { ledOn },
+                    set: { v in
+                        ledOn = v
+                        Haptic.medium()
+                        Task {
+                            _ = await HuaweiAPI.shared.setLed(v)
+                        }
+                    }
+                ))
+                .labelsHidden().tint(.green)
+            }
+
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("定时熄灯")
+                        .font(.system(size: 13.5, weight: .medium))
+                    Text(ambientOn ? "已设置时间段" : "全天保持当前状态")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Toggle("", isOn: $ambientOn)
+                    .labelsHidden().tint(.green)
+            }
+        }
+        .padding(16)
+        .glassCard(radius: 22)
+    }
+
+    // MARK: VPN
+
+    private var vpnCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("VPN 拨号")
+                .font(.system(size: 15, weight: .bold))
+
+            vpnRow("PPTP", "未启用", "未填写服务器地址")
+            Divider().opacity(0.2)
+            vpnRow("L2TP", "未启用", "未填写 LNS 地址")
+            Divider().opacity(0.2)
+
+            HStack {
+                Image(systemName: "shield.checkerboard")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.purple)
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(Color.purple.opacity(0.12)))
+                Text("IPSec")
+                    .font(.system(size: 13))
+                Spacer()
+                Text("只读")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(16)
+        .glassCard(radius: 22)
+    }
+
+    private func vpnRow(_ name: String, _ state: String, _ detail: String) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    Text(name)
+                        .font(.system(size: 13.5, weight: .semibold))
+                    Circle().fill(Color.gray.opacity(0.4)).frame(width: 5, height: 5)
+                    Text(state)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                Text(detail)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button {
+                Haptic.light()
+                store.toast("VPN 配置请到设备后台设置", kind: .info)
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "square.and.pencil").font(.system(size: 10))
+                    Text("填写").font(.system(size: 11))
+                }
+                .foregroundStyle(.blue)
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(Capsule().fill(Color.blue.opacity(0.10)))
+            }
+            .buttonStyle(.plain)
+
+            Toggle("", isOn: .constant(false))
+                .labelsHidden().tint(.green)
+                .disabled(true)
+                .scaleEffect(0.85)
         }
     }
 
-    private func loadState() {
-        // 从当前状态推断移动数据（ConnectionStatus 901 = 已连接）
-        let c = store.status["connStatus"]
-        if !c.isEmpty {
-            mobileData = (c == "901" || c == "902")
+    // MARK: 逻辑
+
+    private var netModeText: String {
+        s["netmode"] == "3" ? "5G SA" : (s["netmode"] == "2" ? "4G" : "5G")
+    }
+
+    private func reload() async {
+        // 移动数据
+        let ds = await HuaweiBridge.shared.get("homeDataSwitch")
+        if let v = ds["dataswitch"] as? String {
+            dataOn = (v == "1")
+        }
+        // IPv6
+        let v6 = await HuaweiBridge.shared.get("ipv6Enable")
+        if let v = v6["ipv6_enable"] as? String {
+            ipv6On = (v == "1")
+        }
+        // 双 WAN
+        let dw = await HuaweiBridge.shared.get("dualWanInfo")
+        dualWan = dw
+        if let m = dw["dualwanmode"] as? String {
+            turboOn = (m != "0")
+        }
+    }
+
+    private func toggleData() async {
+        let next = !dataOn
+        let ok = await HuaweiAPI.shared.setMobileData(next)
+        if ok {
+            dataOn = next
+            store.toast(next ? "移动数据已开启" : "移动数据已关闭", kind: .success)
+        } else {
+            store.toast("设置失败", kind: .error)
+        }
+    }
+
+    private func toggleIPv6() async {
+        let next = !ipv6On
+        let r = await HuaweiBridge.shared.post("ipv6Enable", ["ipv6_enable": next ? 1 : 0])
+        if r["__err"] == nil {
+            ipv6On = next
+            store.toast(next ? "IPv6 已开启" : "IPv6 已关闭", kind: .success)
+        } else {
+            store.toast("设置失败", kind: .error)
         }
     }
 }
