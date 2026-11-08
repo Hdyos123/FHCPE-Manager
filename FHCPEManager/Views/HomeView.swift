@@ -16,6 +16,8 @@ struct HomeView: View {
     @State private var showClearTraffic = false
     @State private var dayQuotaOn = false
     @State private var monthQuotaOn = false
+    @AppStorage("customDown") private var customDown: String = ""
+    @AppStorage("customUp") private var customUp: String = ""
 
     private var s: CpeStatus { store.status }
 
@@ -25,7 +27,6 @@ struct HomeView: View {
                 VStack(spacing: 12) {
                     heroCard
                     speedRow
-                    pccCard
                     contractCard
                     trafficCard
                     deviceCard
@@ -99,17 +100,21 @@ struct HomeView: View {
 
             // CPU / 内存
             HStack(spacing: 0) {
-                Text("CPU ").font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
-                + Text("\(s.int("cpu"))%").font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(.blue)
-
-                Text("   ｜   ").font(.system(size: 11.5)).foregroundStyle(.secondary.opacity(0.4))
-
-                Text("内存 ").font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
-                + Text("\(memPercent)%").font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(.blue)
+                Text("CPU ")
+                    .font(.system(size: 11.5))
+                    .foregroundColor(.secondary)
+                Text("\(s.int("cpu"))%")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundColor(.blue)
+                Text("   ｜   ")
+                    .font(.system(size: 11.5))
+                    .foregroundColor(.secondary.opacity(0.4))
+                Text("内存 ")
+                    .font(.system(size: 11.5))
+                    .foregroundColor(.secondary)
+                Text("\(memPercent)%")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundColor(.blue)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
