@@ -32,7 +32,7 @@ struct RootView: View {
                 .zIndex(-1)
 
             HuaweiHost()
-                .frame(width: 2, height: 2)
+                .frame(width: 200, height: 200)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .allowsHitTesting(false)
                 .zIndex(-1)
