@@ -986,7 +986,6 @@ final class CpeStore: ObservableObject {
     /// 退出登录：停轮询、清状态、回登录页
     func logout() {
         stopPolling()
-        if isHuawei { _ = HuaweiBridge.shared.enterDeveloperMode(password: ""); }
         SessionStore.clear(vendor: "fiberhome")
         SessionStore.clear(vendor: "oppo")
         SessionStore.clear(vendor: "huawei")
