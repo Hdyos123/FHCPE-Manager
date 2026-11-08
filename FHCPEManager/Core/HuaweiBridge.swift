@@ -384,6 +384,11 @@ final class HuaweiBridge: NSObject, ObservableObject {
             return false
         }
         log("WebView 已就绪")
+
+        // 检查桥接函数是否注入成功（关键诊断）
+        let bridgeType = (await evalSync("typeof window.__hwCall")) as? String
+        let bt = bridgeType ?? "nil"
+        log("桥接函数: " + bt)
         guard let url = URL(string: "http://\(host)/") else {
             lastError = "地址无效"
             return false
@@ -404,22 +409,11 @@ final class HuaweiBridge: NSObject, ObservableObject {
         // 等 Vue 渲染出登录框
         var ok = false
         for i in 0..<40 {
-            let st = await jsCall("""
-            function(){
-              return JSON.stringify({
-                inputs: document.querySelectorAll('input').length,
-                hash: location.hash
-              });
-            }
-            """)
-            var inputs = -1
-            var hashNow = "?"
-            if let s = st as? String,
-               let d = s.data(using: .utf8),
-               let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
-                inputs = o["inputs"] as? Int ?? -1
-                hashNow = (o["hash"] as? String) ?? "?"
-            }
+            // 用同步求值探测（更可靠，不依赖注入）
+            let inputsRaw = await evalSync("document.querySelectorAll('input').length")
+            let hashRaw = await evalSync("location.hash")
+            let inputs = (inputsRaw as? Int) ?? ((inputsRaw as? NSNumber)?.intValue ?? -1)
+            let hashNow = (hashRaw as? String) ?? "?"
             if inputs >= 2 {
                 ok = true
                 log("② 登录框就绪 \(i/2)s · hash=\(hashNow)")
@@ -687,6 +681,38 @@ final class HuaweiBridge: NSObject, ObservableObject {
         }
     }
 
+
+    /// 直接求值（不依赖注入的 __hwCall）
+    /// 用 withThrowingTaskGroup 做超时竞速，避免主线程被 asyncAfter 卡住
+    private func evalSync(_ js: String, timeout: TimeInterval = 5) async -> Any? {
+        guard let wv = webView else { return nil }
+
+        let work = Task { @MainActor () -> Any? in
+            await withCheckedContinuation { (cont: CheckedContinuation<Any?, Never>) in
+                wv.evaluateJavaScript(js) { res, err in
+                    if let e = err {
+                        Task { @MainActor in self.log("eval 错误: \(e.localizedDescription)") }
+                    }
+                    cont.resume(returning: res)
+                }
+            }
+        }
+
+        let timer = Task {
+            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+        }
+
+        return await withTaskGroup(of: AnyBox?.self) { group in
+            group.addTask { AnyBox(await work.value) }
+            group.addTask { _ = await timer.value; return nil }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            work.cancel()
+            timer.cancel()
+            return first?.value
+        }
+    }
+
     private func quote(_ s: String) -> String {
         let d = (try? JSONSerialization.data(withJSONObject: [s])) ?? Data("[\"\"]".utf8)
         let arr = String(data: d, encoding: .utf8) ?? "[\"\"]"
@@ -699,6 +725,12 @@ final class HuaweiBridge: NSObject, ObservableObject {
          .replacingOccurrences(of: "\n", with: "\\n")
          .replacingOccurrences(of: "\r", with: "")
     }
+}
+
+/// 把任意值装箱，供 TaskGroup 使用
+private struct AnyBox: @unchecked Sendable {
+    let value: Any?
+    init(_ v: Any?) { value = v }
 }
 
 // MARK: - 回调
