@@ -1,6 +1,7 @@
 import Foundation
 import WebKit
 import UIKit
+import CommonCrypto
 
 /// 华为 CPE 的 WebView 桥接层
 ///
@@ -33,6 +34,276 @@ final class HuaweiBridge: NSObject, ObservableObject {
     private var seq = 0
 
     private override init() { super.init() }
+
+    // MARK: 原生 SCRAM 登录（照 CPEUltra 的实现）
+    //
+    // 1. GET  /api/webserver/SesTokInfo → SessionID + Token
+    // 2. POST /api/user/challenge_login → salt / iterations / servernonce
+    // 3. 计算 clientproof（PBKDF2 + HMAC + XOR）
+    // 4. POST /api/user/authentication_login → 建立会话
+    // 之后所有请求带 Cookie: SessionID + __RequestVerificationToken
+
+    private var sessionCookie: String = ""
+    private var csrfToken: String = ""
+
+    /// 原生 SCRAM 登录，不走 WebView
+    func nativeLogin(host: String, user: String, password: String) async -> Bool {
+        self.host = host
+        self.user = user
+        self.pass = password
+        sessionCookie = ""
+        csrfToken = ""
+
+        let base = "http://\(host)"
+        log("SCRAM 登录开始 \(user)@\(host)")
+
+        // ① 取会话
+        guard await fetchSession(base) else {
+            lastError = "无法获取会话"
+            return false
+        }
+        log("会话建立")
+
+        // ② 挑战
+        let firstNonce = Self.randomHex(32)
+        let chBody = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><request><username>"
+            + Self.esc(user) + "</username><firstnonce>"
+            + firstNonce + "</firstnonce><mode>1</mode></request>"
+
+        guard let ch = await post(base, "/api/user/challenge_login", chBody) else {
+            lastError = "挑战请求失败"
+            return false
+        }
+        guard let salt = Self.tag(ch, "salt"),
+              let iterStr = Self.tag(ch, "iterations"),
+              let serverNonce = Self.tag(ch, "servernonce") else {
+            lastError = "挑战响应异常：" + String(ch.prefix(80))
+            return false
+        }
+        let iterations = Int(iterStr) ?? 1000
+        log("挑战 OK salt=\(salt.count/2)B iter=\(iterations)")
+
+        // ③ 计算证明
+        // forge 的 pbkdf2 把 salt 当 binary string → utf8 编码
+        guard let saltBytes = Self.hexToBytes(salt) else {
+            lastError = "salt 解析失败"
+            return false
+        }
+        // 模拟 forge：binary string → utf8
+        let saltForPbkdf2 = String(bytes: saltBytes, encoding: .isoLatin1)?.data(using: .utf8)
+            ?? Data(saltBytes)
+
+        guard let pwdBytes = password.data(using: .utf8) else {
+            lastError = "密码编码失败"
+            return false
+        }
+
+        guard let salted = Self.pbkdf2(pwdBytes, salt: saltForPbkdf2, iterations: iterations) else {
+            lastError = "PBKDF2 失败"
+            return false
+        }
+
+        let clientKey = Self.hmac(salted, "Client Key")
+        let storedKey = Self.sha256(clientKey)
+        let authMsg = firstNonce + "," + serverNonce + "," + serverNonce
+        let clientSig = Self.hmac(storedKey, authMsg)
+
+        guard let ck = Self.hexToBytes(clientKey),
+              let cs = Self.hexToBytes(clientSig) else {
+            lastError = "证明计算失败"
+            return false
+        }
+        let proof = Self.xorHex(ck, cs)
+
+        // ④ 认证
+        let authBody = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><request><clientproof>"
+            + proof + "</clientproof><finalnonce>"
+            + serverNonce + "</finalnonce><logintype>1</logintype></request>"
+
+        guard let au = await post(base, "/api/user/authentication_login", authBody) else {
+            lastError = "认证请求失败"
+            return false
+        }
+        if au.contains("<error>") {
+            let code = Self.tag(au, "code") ?? "?"
+            let wait = Self.tag(au, "waittime") ?? ""
+            let remain = Self.tag(au, "remaincount") ?? ""
+            lastError = "认证失败 code=\(code)"
+                + (wait.isEmpty ? "" : " 等待\(wait)秒")
+                + (remain.isEmpty ? "" : " 剩余\(remain)次")
+            log("认证失败 \(au.prefix(150))")
+            return false
+        }
+        log("认证 OK")
+
+        // ⑤ 刷新会话
+        _ = await fetchSession(base)
+
+        // ⑥ 验证
+        if let st = await get(base, "/api/monitoring/status"), st.contains("<response>") {
+            log("✓ SCRAM 登录成功")
+            loggedInNative = true
+            return true
+        }
+        lastError = "登录后仍无法读取数据"
+        return false
+    }
+
+    private(set) var loggedInNative = false
+
+    // MARK: 原生 HTTP
+
+    private func fetchSession(_ base: String) async -> Bool {
+        guard let r = await rawGet(base, "/api/webserver/SesTokInfo"),
+              let tk = Self.tag(r.body, "TokInfo") else { return false }
+        csrfToken = tk.unesc()
+        for (k, v) in r.cookies { sessionCookie = "\(k)=\(v)" }
+        return true
+    }
+
+    private struct RawResp { let body: String; let cookies: [(String, String)] }
+
+    private func rawGet(_ base: String, _ path: String) async -> RawResp? {
+        guard var comps = URLComponents(string: base + path) else { return nil }
+        comps.queryItems = [URLQueryItem(name: "_", value: String(Int(Date().timeIntervalSince1970 * 1000)))]
+        var req = URLRequest(url: comps.url!)
+        req.timeoutInterval = 8
+        req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)", forHTTPHeaderField: "User-Agent")
+        req.setValue("http://\(host)/", forHTTPHeaderField: "Referer")
+        if !sessionCookie.isEmpty {
+            req.setValue(sessionCookie, forHTTPHeaderField: "Cookie")
+        }
+        do {
+            let (d, resp) = try await URLSession.shared.data(for: req)
+            return RawResp(body: String(data: d, encoding: .utf8) ?? "",
+                           cookies: Self.parseCookies(resp))
+        } catch { return nil }
+    }
+
+    private func post(_ base: String, _ path: String, _ body: String) async -> String? {
+        guard var comps = URLComponents(string: base + path) else { return nil }
+        comps.queryItems = [URLQueryItem(name: "_", value: String(Int(Date().timeIntervalSince1970 * 1000)))]
+        var req = URLRequest(url: comps.url!)
+        req.httpMethod = "POST"
+        req.httpBody = body.data(using: .utf8)
+        req.timeoutInterval = 10
+        req.setValue("application/xml; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+        req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)", forHTTPHeaderField: "User-Agent")
+        req.setValue("http://\(host)/", forHTTPHeaderField: "Referer")
+        req.setValue(csrfToken, forHTTPHeaderField: "__RequestVerificationToken")
+        if !sessionCookie.isEmpty {
+            req.setValue(sessionCookie, forHTTPHeaderField: "Cookie")
+        }
+        do {
+            let (d, resp) = try await URLSession.shared.data(for: req)
+            for (k, v) in Self.parseCookies(resp) { sessionCookie = "\(k)=\(v)" }
+            return String(data: d, encoding: .utf8) ?? ""
+        } catch { return nil }
+    }
+
+    private func get(_ base: String, _ path: String) async -> String? {
+        await rawGet(base, path)?.body
+    }
+
+    private static func parseCookies(_ resp: URLResponse) -> [(String, String)] {
+        guard let h = resp as? HTTPURLResponse else { return [] }
+        var out: [(String, String)] = []
+        for (k, v) in h.allHeaderFields {
+            guard String(describing: k).lowercased() == "set-cookie" else { continue }
+            let raw = String(describing: v)
+            for part in raw.components(separatedBy: ",") {
+                let kv = part.components(separatedBy: ";").first ?? ""
+                let pair = kv.components(separatedBy: "=")
+                if pair.count >= 2 {
+                    let name = pair[0].trimmingCharacters(in: .whitespaces)
+                    let val = pair.dropFirst().joined(separator: "=")
+                        .trimmingCharacters(in: .whitespaces)
+                    if !name.isEmpty { out.append((name, val)) }
+                }
+            }
+        }
+        return out
+    }
+
+    // MARK: 加密工具
+
+    static func esc(_ s: String) -> String {
+        s.replacingOccurrences(of: "&", with: "&amp;")
+         .replacingOccurrences(of: "<", with: "&lt;")
+         .replacingOccurrences(of: ">", with: "&gt;")
+    }
+
+    static func tag(_ xml: String, _ name: String) -> String? {
+        guard let a = xml.range(of: "<\(name)>"),
+              let b = xml.range(of: "</\(name)>") else { return nil }
+        let v = String(xml[a.upperBound..<b.lowerBound])
+        return v.isEmpty ? nil : v
+    }
+
+    static func randomHex(_ n: Int) -> String {
+        var bytes = [UInt8](repeating: 0, count: n)
+        _ = SecRandomCopyBytes(kSecRandomDefault, n, &bytes)
+        return bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func hexToBytes(_ s: String) -> Data? {
+        var d = Data()
+        var idx = s.startIndex
+        while idx < s.endIndex {
+            let next = s.index(idx, offsetBy: 2, limitedBy: s.endIndex) ?? s.endIndex
+            guard let b = UInt8(s[idx..<next], radix: 16) else { return nil }
+            d.append(b)
+            idx = next
+        }
+        return d
+    }
+
+    static func pbkdf2(_ pwd: Data, salt: Data, iterations: Int) -> String? {
+        var out = [UInt8](repeating: 0, count: 32)
+        let st = pwd.withUnsafeBytes { p in
+            salt.withUnsafeBytes { s in
+                CCKeyDerivationPBKDF(CCPBKDFAlgorithm(kCCPBKDF2),
+                                     p.bindMemory(to: Int8.self).baseAddress, pwd.count,
+                                     s.bindMemory(to: UInt8.self).baseAddress, salt.count,
+                                     CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256),
+                                     UInt32(iterations),
+                                     &out, out.count)
+            }
+        }
+        guard st == kCCSuccess else { return nil }
+        return Data(out).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func hmac(_ hexKey: String, _ msg: String) -> String {
+        guard let key = hexToBytes(hexKey) else { return "" }
+        var out = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+        let msgData = msg.data(using: .utf8) ?? Data()
+        key.withUnsafeBytes { k in
+            msgData.withUnsafeBytes { m in
+                CCHmac(CCHmacAlgorithm(kCCHmacAlgSHA256),
+                       k.baseAddress, key.count,
+                       m.baseAddress, msgData.count,
+                       &out)
+            }
+        }
+        return Data(out).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func sha256(_ hex: String) -> String {
+        guard let d = hexToBytes(hex) else { return "" }
+        var out = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+        d.withUnsafeBytes { p in
+            _ = CC_SHA256(p.baseAddress, CC_LONG(d.count), &out)
+        }
+        return Data(out).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func xorHex(_ a: Data, _ b: Data) -> String {
+        let n = min(a.count, b.count)
+        var out = Data(count: n)
+        for i in 0..<n { out[i] = a[i] ^ b[i] }
+        return out.map { String(format: "%02x", $0) }.joined()
+    }
 
     // MARK: 挂载
 
@@ -475,5 +746,40 @@ extension HuaweiBridge: WKNavigationDelegate {
             return ["__err": "parse"]
         }
         return obj
+    }
+
+    // MARK: 原生取数（SCRAM 登录后可用）
+
+    /// 按路径 GET，返回解析后的字典
+    func nativeGetPath(_ path: String) async -> [String: Any] {
+        guard loggedInNative else { return [:] }
+        let base = "http://\(host)"
+        guard let body = await get(base, path) else { return [:] }
+        if body.contains("<error>") {
+            let code = Self.tag(body, "code") ?? "?"
+            return ["__err": code]
+        }
+        return Self.xmlToDict(body)
+    }
+
+    /// 极简 XML → 字典
+    static func xmlToDict(_ xml: String) -> [String: Any] {
+        var out: [String: Any] = [:]
+        // 去掉声明
+        var body = xml
+        if let r = body.range(of: "?>") { body = String(body[r.upperBound...]) }
+
+        // 提取最外层单层元素：<a>v</a>
+        let pattern = "<([A-Za-z0-9_]+)>([^<]*)</\\1>"
+        if let re = try? NSRegularExpression(pattern: pattern) {
+            let ns = body as NSString
+            for m in re.matches(in: body, range: NSRange(location: 0, length: ns.length)) {
+                guard m.numberOfRanges >= 3 else { continue }
+                let k = ns.substring(with: m.range(at: 1))
+                let v = ns.substring(with: m.range(at: 2))
+                out[k] = v
+            }
+        }
+        return out
     }
 }
