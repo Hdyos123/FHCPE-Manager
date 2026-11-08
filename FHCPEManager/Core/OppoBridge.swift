@@ -65,6 +65,9 @@ final class OppoBridge: NSObject, ObservableObject {
 
         let wv = WKWebView(frame: .zero, configuration: cfg)
         wv.navigationDelegate = self
+        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) "
+            + "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 "
+            + "Mobile/15E148 Safari/604.1"
         wv.alpha = 0.02   // 不能为 0，否则 WebKit 暂停 JS
         wv.isUserInteractionEnabled = false
         view.addSubview(wv)
