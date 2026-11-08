@@ -598,6 +598,26 @@ final class OppoBridge: NSObject, ObservableObject {
         }
     }
 
+
+    /// 直接求值（用于简单探测，不依赖 __oppoCall）
+    private func evalSync(_ js: String, timeout: TimeInterval = 5) async -> Any? {
+        guard let wv = webView else { return nil }
+        let work = Task { @MainActor () -> Any? in
+            await withCheckedContinuation { (c: CheckedContinuation<Any?, Never>) in
+                wv.evaluateJavaScript(js) { r, _ in c.resume(returning: r) }
+            }
+        }
+        let timer = Task { try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000)) }
+        let r = await withTaskGroup(of: OppoAnyBox?.self) { g in
+            g.addTask { OppoAnyBox(await work.value) }
+            g.addTask { _ = await timer.value; return nil }
+            let f = await g.next() ?? nil
+            g.cancelAll(); work.cancel(); timer.cancel()
+            return f?.value
+        }
+        return r
+    }
+
     private func jsCall(_ fn: String) async -> Any? {
         guard let wv = webView else { return nil }
         seq += 1
@@ -668,4 +688,58 @@ extension OppoBridge: WKNavigationDelegate {
     private func fail(_ e: Error) {
         log("✗ 加载失败: \(e.localizedDescription)")
     }
+
+    /// 尝试用已有 Cookie 免登录
+    /// WKWebsiteDataStore.default() 会持久化 Cookie，App 重启后可能仍然有效
+    func tryRestore(host: String) async -> Bool {
+        guard let wv = webView else { return false }
+
+        self.host = host
+        trace.removeAll()
+        log("检查已有会话…")
+
+        // 只加载首页，不填表
+        if wv.url?.host != host {
+            guard let url = URL(string: "http://\(host)/") else { return false }
+            var req = URLRequest(url: url)
+            req.timeoutInterval = 12
+            wv.load(req)
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+        }
+
+        // 等页面就绪
+        var inputs = -1
+        for _ in 0..<12 {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            let r = await evalSync("document.querySelectorAll('input').length")
+            inputs = (r as? Int) ?? ((r as? NSNumber)?.intValue ?? -1)
+            if inputs >= 0 { break }
+        }
+
+        // 有密码框 = 未登录
+        if inputs >= 1 {
+            let hasPwd = (await evalSync("!!document.querySelector('input[type=password]')")) as? Bool ?? true
+            if hasPwd {
+                log("  需要登录（有密码框）")
+                return false
+            }
+        }
+
+        // 探一次数据
+        let probe = await get("monitoringStatus")
+        if probe["__err"] != nil || probe.isEmpty {
+            log("  会话已失效")
+            return false
+        }
+
+        ready = true
+        log("✓ 会话有效，免登录成功")
+        return true
+    }
+}
+
+/// OPPO 用的装箱类型（与 HuaweiBridge 的私有类型同名不冲突）
+private struct OppoAnyBox: @unchecked Sendable {
+    let value: Any?
+    init(_ v: Any?) { value = v }
 }
