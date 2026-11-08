@@ -417,9 +417,9 @@ final class HuaweiBridge: NSObject, ObservableObject {
             let inputs = (inputsRaw as? Int) ?? ((inputsRaw as? NSNumber)?.intValue ?? -1)
             let hashNow = (hashRaw as? String) ?? "?"
             // 华为只需要密码框（1 个）+ 可选的语言下拉
-            let hasPwd = false
+            var hasPwd = false
             if let raw = await evalSync("!!document.querySelector('input[type=password]')") {
-                hasPwd = ((raw as? Bool) ?? ((raw as? NSNumber)?.boolValue ?? false))
+                hasPwd = (raw as? Bool) ?? ((raw as? NSNumber)?.boolValue ?? false)
             }
             if hasPwd && inputs >= 1 {
                 ok = true
