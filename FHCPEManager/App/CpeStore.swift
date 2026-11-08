@@ -954,7 +954,8 @@ final class CpeStore: ObservableObject {
             return p["__err"] == nil || r["__err"] == nil
         }
         if isOppo {
-            let r = await OppoBridge.shared.get("clearFlowData")
+            // OPPO 的 clearFlowData 走页面 $request
+            let r = await OppoBridge.shared.post("clearFlowData", [:])
             return r["__err"] == nil
         }
         // 烽火
