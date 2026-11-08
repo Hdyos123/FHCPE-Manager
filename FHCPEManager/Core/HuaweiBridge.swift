@@ -396,9 +396,9 @@ final class HuaweiBridge: NSObject, ObservableObject {
         wv.load(req)
 
         var waited = 0.0
-        while !pageLoaded && waited < 25 {
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            waited += 0.3
+        while !pageLoaded && waited < 15 {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            waited += 0.2
         }
         log(pageLoaded ? "① 页面加载完成 \(Int(waited))s" : "① ✗ 页面加载超时 25s")
 
@@ -410,21 +410,26 @@ final class HuaweiBridge: NSObject, ObservableObject {
 
         // 等 Vue 渲染出登录框
         var ok = false
-        for i in 0..<40 {
+        for i in 0..<24 {
             // 用同步求值探测（更可靠，不依赖注入）
             let inputsRaw = await evalSync("document.querySelectorAll('input').length")
             let hashRaw = await evalSync("location.hash")
             let inputs = (inputsRaw as? Int) ?? ((inputsRaw as? NSNumber)?.intValue ?? -1)
             let hashNow = (hashRaw as? String) ?? "?"
-            if inputs >= 2 {
+            // 华为只需要密码框（1 个）+ 可选的语言下拉
+            let hasPwd = false
+            if let raw = await evalSync("!!document.querySelector('input[type=password]')") {
+                hasPwd = ((raw as? Bool) ?? ((raw as? NSNumber)?.boolValue ?? false))
+            }
+            if hasPwd && inputs >= 1 {
                 ok = true
-                log("② 登录框就绪 \(i/2)s · hash=\(hashNow)")
+                log("② 登录框就绪 \(i/2)s · hash=\(hashNow) · inputs=\(inputs)")
                 break
             }
             if i % 10 == 0 {
                 log("  等待登录框 \(i/2)s · inputs=\(inputs) · hash=\(hashNow)")
             }
-            try? await Task.sleep(nanoseconds: 500_000_000)
+            try? await Task.sleep(nanoseconds: 300_000_000)
         }
         guard ok else {
             lastError = "页面未渲染登录框（20 秒超时）"
@@ -458,9 +463,10 @@ final class HuaweiBridge: NSObject, ObservableObject {
         // 必须已经进入 home 页
         if !h.contains("home") { return false }
 
-        let nRaw = await evalSync("document.querySelectorAll('input').length")
-        let n = (nRaw as? Int) ?? ((nRaw as? NSNumber)?.intValue ?? 99)
-        if n >= 2 { return false }
+        // 密码框不应再存在（登录后表单已销毁）
+        let hasPwdRaw = await evalSync("!!document.querySelector('input[type=password]')")
+        let hasPwd = (hasPwdRaw as? Bool) ?? ((hasPwdRaw as? NSNumber)?.boolValue ?? false)
+        if hasPwd { return false }
 
         return true
     }
@@ -470,24 +476,30 @@ final class HuaweiBridge: NSObject, ObservableObject {
         function(){
           return new Promise(function(resolve){
             try {
-              var ins = document.querySelectorAll('input');
-              if (ins.length < 2) { resolve('NO_INPUT'); return; }
+              // 华为登录页没有账号输入框，只有密码框（type=password）
+              // 第一个 input 是语言选择器，不能往里塞文本，否则按钮点击无效
+              var pwd = document.querySelector('input[type=password]');
+              if (!pwd) { resolve('NO_PASSWORD'); return; }
               var setter = Object.getOwnPropertyDescriptor(
                 window.HTMLInputElement.prototype, 'value').set;
-              setter.call(ins[0], '\(jsEscape(user))');
-              ins[0].dispatchEvent(new Event('input', {bubbles:true}));
-              setter.call(ins[1], '\(jsEscape(pass))');
-              ins[1].dispatchEvent(new Event('input', {bubbles:true}));
-              ins[1].dispatchEvent(new Event('change', {bubbles:true}));
+              setter.call(pwd, '\(jsEscape(pass))');
+              pwd.dispatchEvent(new Event('input', {bubbles:true}));
+              pwd.dispatchEvent(new Event('change', {bubbles:true}));
 
               setTimeout(function(){
                 var btn = Array.prototype.slice.call(
                   document.querySelectorAll('button')).filter(function(b){
-                    return /登录|Login|LOGIN/i.test(b.textContent || '');
+                    var t = (b.textContent || '').trim();
+                    return t === '登录' || /^login$/i.test(t);
                   })[0];
-                if (btn) btn.click();
-                setTimeout(function(){ resolve(location.hash); }, 5000);
-              }, 700);
+                if (btn) {
+                  btn.click();
+                  // 登录成功后页面会重载，这里只等 3 秒
+                  setTimeout(function(){ resolve(location.hash); }, 3000);
+                } else {
+                  resolve('NO_BUTTON');
+                }
+              }, 400);
             } catch(e) { resolve('ERR:' + e.message); }
           });
         }
@@ -512,7 +524,7 @@ final class HuaweiBridge: NSObject, ObservableObject {
         // 等页面跳转完成
         var lastProbe = ""
         var lastHash = ""
-        for i in 0..<30 {
+        for i in 0..<20 {
             let h = (await evalSync("location.hash")) as? String ?? ""
             let n = (await evalSync("document.querySelectorAll('input').length")) as? Int ?? -1
             lastHash = h
