@@ -215,8 +215,6 @@ final class HuaweiAPI {
         // ① 先试复用上次的会话（免登录，通常 1 秒内）
         if await HuaweiBridge.shared.tryRestoreSession(host: host) {
             loggedIn = true
-            // 顺手进开发者模式（解锁小区列表）
-            _ = await HuaweiBridge.shared.enterDeveloperMode(password: password)
             return
         }
 
@@ -229,8 +227,6 @@ final class HuaweiAPI {
                           userInfo: [NSLocalizedDescriptionKey: reason])
         }
         loggedIn = true
-        // 登录成功后进开发者模式，解锁小区列表
-        _ = await HuaweiBridge.shared.enterDeveloperMode(password: password)
     }
 
     /// 别名 → 路径
@@ -248,6 +244,7 @@ final class HuaweiAPI {
         "wanInfo": "/api/ntwk/dualwaninfo",
         "deviceInformation": "/api/device/information",
         "convergedStatus": "/api/monitoring/converged-status",
+        "smsCount": "/api/sms/sms-count",
     ]
 
     /// 取数据：全部走页面通道（自带加密）
@@ -434,7 +431,8 @@ final class HuaweiAPI {
         let batch = await HuaweiBridge.shared.getBatch([
             "singal", "monitoringStatus", "monitoringTraffic", "mounthTraffic",
             "netCurrentPlmn", "deviceInformation", "systemDeviceinfoex",
-            "wlanStatusSwitch", "connection", "netMode"
+            "wlanStatusSwitch", "connection", "netMode",
+            "setMobileTraffic", "dialyTraffic"
         ])
 
         func b(_ k: String) -> [String: Any] { batch[k] ?? [:] }
@@ -522,6 +520,13 @@ final class HuaweiAPI {
             v["todayUsed"] = String(Int(n))
         }
         if let t = mo["MonthLastClearTime"] as? String { v["monthStart"] = t }
+        if let t = mo["MonthDuration"] as? String { v["monthDuration"] = t }
+
+        // 本月/日额度
+        let sd = b("setMobileTraffic")
+        if let t = sd["DataLimit"] as? String, t != "0MB" { v["monthLimit"] = t }
+        let dl = b("dialyTraffic")
+        if let t = dl["DayDataLimit"] as? String, t != "0MB" { v["dayLimit"] = t }
 
         // ⑤ 运营商
         let pl = b("netCurrentPlmn")
@@ -678,26 +683,41 @@ final class HuaweiAPI {
     }
 
     func fetchSms(page: Int = 1, count: Int = 20) async -> [SmsItem] {
-        let body = """
-        <request><PageIndex>\(page)</PageIndex><ReadCount>\(count)</ReadCount>\
-        <BoxType>1</BoxType><SortType>0</SortType><Ascending>0</Ascending>\
-        <UnreadPreferred>0</UnreadPreferred></request>
-        """
+        // ① 先试接口（部分固件可用）
         let rr = await bridgePost("smsList", [
             "PageIndex": page, "ReadCount": count,
             "BoxType": 1, "SortType": 0, "Ascending": 0, "UnreadPreferred": 0
         ])
-        guard rr["__err"] == nil else { return [] }
-        let n = JSONNode(rr)
-
-        return n.all("Message").map { m in
+        if rr["__err"] == nil {
+            let n = JSONNode(rr)
+            let items = n.all("Message").map { m in
                 SmsItem(index: m.text("Index") ?? "",
                         phone: m.text("Phone") ?? "",
                         content: (m.text("Content") ?? "").replacingOccurrences(of: "&#13;", with: "\n"),
                         date: m.text("Date") ?? "",
                         read: (m.text("Smstat") ?? "0") == "0",
                         outgoing: (m.text("SmsType") ?? "1") == "2")
+            }
+            if !items.isEmpty { return items }
         }
+
+        // ② 接口不可用时读 DOM（H153 固件走这条）
+        let rows = await HuaweiBridge.shared.fetchSmsDom()
+        return rows.enumerated().map { i, r in
+            SmsItem(index: String(i),
+                    phone: r.phone,
+                    content: r.content,
+                    date: r.date,
+                    read: true,
+                    outgoing: false)
+        }
+    }
+
+    /// 短信数量统计（接口可用）
+    func fetchSmsCount() async -> (inbox: Int, outbox: Int, unread: Int) {
+        let r = await bridgeGet("smsCount")
+        func num(_ k: String) -> Int { Int(r[k] as? String ?? "0") ?? 0 }
+        return (num("LocalInbox"), num("LocalOutbox"), num("LocalUnread"))
     }
 
     func sendSms(to numbers: [String], text: String) async -> Bool {
@@ -772,12 +792,41 @@ final class HuaweiAPI {
     }
 
     /// 当前锁定
+    /// 锁频配置（含小区列表）
+    /// H153 需要开发者权限才能读，首次调用时自动进一次
     func fetchLockFreq() async -> [String: String] {
-        // H153 固件的 lock-freq 接口未开放，锁定状态由 netMode 反映
+        // 先试普通权限
+        var raw = await HuaweiBridge.shared.get("lockFreq")
+        if raw["__err"] != nil {
+            // 需要开发者权限
+            let savedPwd = Settings.load().password
+            guard !savedPwd.isEmpty,
+                  await HuaweiBridge.shared.enterDeveloperMode(password: savedPwd) else {
+                return [:]
+            }
+            raw = await HuaweiBridge.shared.get("lockFreq")
+            if raw["__err"] != nil { return [:] }
+        }
+
         var v: [String: String] = [:]
-        let m = await bridgeGet("netMode")
-        if let t = m["LTEBand"] as? String, !t.isEmpty { v["lteBand"] = t }
-        if let t = m["NetworkBand"] as? String, !t.isEmpty { v["nrBand"] = t }
+        // 从嵌套结构里提取
+        if let nr = raw["nr_info"] as? [String: Any] {
+            if let m = nr["lock_mode"] { v["nrLockMode"] = "\(m)" }
+            if let fi = nr["freq_infos"] as? [String: Any],
+               let list = fi["freq_info"] as? [[String: Any]] {
+                let cells = list.compactMap { c -> String? in
+                    let b = c["band"] as? String ?? ""
+                    let f = c["freq"] as? String ?? ""
+                    let p = c["pci"] as? String ?? ""
+                    return b.isEmpty ? nil : "\(b),\(f),\(p)"
+                }
+                v["nrCells"] = cells.joined(separator: ";")
+            }
+        }
+        if let lte = raw["lte_info"] as? [String: Any] {
+            if let m = lte["lock_mode"] { v["lteLockMode"] = "\(m)" }
+            if let b = lte["all_bands"] as? String { v["lteBands"] = b }
+        }
         return v
     }
 
