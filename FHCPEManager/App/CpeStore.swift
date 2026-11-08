@@ -944,6 +944,28 @@ final class CpeStore: ObservableObject {
     }
 
     /// 重启设备：按厂商分流
+
+    /// 清空流量统计
+    func clearTraffic() async -> Bool {
+        if isHuawei {
+            let r = await HuaweiBridge.shared.get("clearTraffic")
+            // 华为用 POST
+            let p = await HuaweiBridge.shared.post("clearTraffic", [:])
+            return p["__err"] == nil || r["__err"] == nil
+        }
+        if isOppo {
+            let r = await OppoBridge.shared.get("clearFlowData")
+            return r["__err"] == nil
+        }
+        // 烽火
+        if useNative {
+            let t = (try? await CpeNativeAPI.shared.post(
+                "send_at_cmd_web", ["cmd": "AT+CPMS"])) ?? [:]
+            return t["result"] != nil
+        }
+        return false
+    }
+
     func reboot() async -> Bool {
         if isHuawei { return await HuaweiAPI.shared.reboot() }
         if isOppo {
