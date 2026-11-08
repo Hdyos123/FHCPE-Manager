@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// 华为短信（列表 / 发送 / 删除 / 验证码提取）
+/// 华为短信 —— 照 CPE Ultra 布局
+/// 顶部四个统计卡 / 发送入口 / 短信列表
 struct HuaweiSmsView: View {
     @EnvironmentObject var store: CpeStore
 
@@ -10,143 +11,380 @@ struct HuaweiSmsView: View {
     @State private var composeTo = ""
     @State private var composeText = ""
     @State private var sending = false
-    @State private var pendingDelete: HuaweiAPI.SmsItem?
+    @State private var counts = (inbox: 0, outbox: 0, unread: 0)
+    @State private var boxFilter = 1          // 1 收件箱 2 已发
+    @State private var selectMode = false
+    @State private var selected = Set<String>()
+    @State private var detail: HuaweiAPI.SmsItem?
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 10) {
-                    if loading && items.isEmpty {
-                        ProgressView().padding(.top, 60)
-                    } else if items.isEmpty {
-                        emptyView
-                    } else {
-                        ForEach(items) { m in
-                            row(m)
-                        }
-                    }
+                VStack(spacing: 12) {
+                    statRow
+                    sendEntry
+                    listCard
                 }
-                .padding(.horizontal, 14)
-                .padding(.top, 8)
-                .padding(.bottom, 30)
+                .padding(.horizontal, 12)
+                .padding(.top, 6)
+                .padding(.bottom, 96)
             }
-            .scrollContentBackground(.hidden)
             .background(GlassListBackground())
-            .navigationTitle("短信")
+            .navigationBarHidden(true)
             .refreshable { await reload() }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Haptic.light()
-                        composeTo = ""
-                        composeText = ""
-                        showCompose = true
-                    } label: {
-                        Image(systemName: "square.and.pencil")
-                    }
-                }
-            }
+            .task { await reload() }
             .sheet(isPresented: $showCompose) {
                 composeSheet
                     .presentationDetents([.medium, .large])
             }
-            .alert("删除短信", isPresented: Binding(
-                get: { pendingDelete != nil },
-                set: { if !$0 { pendingDelete = nil } }
-            )) {
-                Button("取消", role: .cancel) { pendingDelete = nil }
-                Button("删除", role: .destructive) {
-                    guard let m = pendingDelete else { return }
-                    pendingDelete = nil
-                    Task {
-                        let ok = await HuaweiAPI.shared.deleteSms(indices: [m.index])
-                        store.toast(ok ? "已删除" : "删除失败", kind: ok ? .success : .error)
-                        if ok { await reload() }
-                    }
-                }
-            } message: {
-                Text("短信将从设备与 SIM 卡上永久删除，无法撤销。")
+            .sheet(item: $detail) { m in
+                detailSheet(m)
+                    .presentationDetents([.medium, .large])
             }
-            .task { await reload() }
         }
     }
 
-    // MARK: 行
+    // MARK: 统计卡
 
-    private func row(_ m: HuaweiAPI.SmsItem) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: m.outgoing ? "arrow.up.right" : "arrow.down.left")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(m.outgoing ? Color.orange : Color.blue)
-                    .frame(width: 16, height: 16)
-                    .background(Circle().fill((m.outgoing ? Color.orange : Color.blue).opacity(0.12)))
+    private var statRow: some View {
+        HStack(spacing: 8) {
+            statBox("收件箱", "\(counts.inbox)", "tray.full.fill", .blue)
+            statBox("发件箱", "\(counts.outbox)", "paperplane.fill", .green)
+            statBox("未读", "\(counts.unread)", "envelope.badge.fill", .orange)
+            statBox("剩余容量", "\(max(0, 530 - counts.inbox))", "gauge.medium", .purple)
+        }
+        .padding(10)
+        .glassCard(radius: 22)
+    }
 
-                Text(m.phone.isEmpty ? "未知号码" : m.phone)
-                    .font(.system(size: 13.5, weight: .semibold))
-                    .lineLimit(1)
+    private func statBox(_ title: String, _ value: String,
+                         _ icon: String, _ color: Color) -> some View {
+        VStack(spacing: 6) {
+            Circle()
+                .fill(color.opacity(0.15))
+                .frame(width: 38, height: 38)
+                .overlay(
+                    Image(systemName: icon)
+                        .font(.system(size: 15))
+                        .foregroundStyle(color)
+                )
+            Text(value)
+                .font(.system(size: 19, weight: .bold, design: .rounded))
+            Text(title)
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.primary.opacity(0.04))
+        )
+    }
 
+    // MARK: 发送入口
+
+    private var sendEntry: some View {
+        Button {
+            Haptic.light()
+            composeTo = ""
+            composeText = ""
+            showCompose = true
+        } label: {
+            HStack(spacing: 12) {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.green.opacity(0.14))
+                    .frame(width: 36, height: 36)
+                    .overlay(
+                        Image(systemName: "square.and.pencil")
+                            .font(.system(size: 15))
+                            .foregroundStyle(.green)
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("发送短信")
+                        .font(.system(size: 14.5, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Text("支持一次发给多个号码")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
-
-                Text(shortDate(m.date))
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary.opacity(0.5))
             }
+            .padding(12)
+            .glassCard(radius: 18)
+        }
+        .buttonStyle(.plain)
+    }
 
-            Text(m.content)
-                .font(.system(size: 13))
-                .foregroundStyle(.primary.opacity(0.85))
-                .lineLimit(4)
-                .frame(maxWidth: .infinity, alignment: .leading)
+    // MARK: 列表
 
-            // 验证码
-            if let code = verificationCode(m.content) {
+    private var listCard: some View {
+        VStack(spacing: 10) {
+            // 标题行
+            HStack(spacing: 8) {
+                Text("短信列表")
+                    .font(.system(size: 15, weight: .bold))
+                Text("\(items.count)")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Capsule().fill(Color.primary.opacity(0.08)))
+                Spacer()
                 Button {
-                    Haptic.success()
-                    UIPasteboard.general.string = code
-                    store.toast("已复制验证码 \(code)", kind: .success)
+                    Haptic.light()
+                    boxFilter = boxFilter == 1 ? 2 : 1
+                    Task { await reload() }
                 } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "doc.on.doc")
-                            .font(.system(size: 9))
-                        Text("复制验证码 \(code)")
-                            .font(.system(size: 11, weight: .medium))
+                    HStack(spacing: 3) {
+                        Text(boxFilter == 1 ? "收件箱" : "已发送")
+                            .font(.system(size: 11.5))
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 8, weight: .bold))
                     }
                     .foregroundStyle(.blue)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, 9).padding(.vertical, 4)
+                    .background(Capsule().fill(Color.blue.opacity(0.10)))
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    Haptic.light()
+                    selectMode.toggle()
+                    if !selectMode { selected.removeAll() }
+                } label: {
+                    Text(selectMode ? "取消" : "选择")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.blue)
+                        .padding(.horizontal, 9).padding(.vertical, 4)
+                        .background(Capsule().fill(Color.blue.opacity(0.10)))
+                }
+                .buttonStyle(.plain)
+            }
+
+            // 未读 + 全部已读
+            HStack {
+                Text("\(counts.unread) 条未读")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    Haptic.light()
+                    Task {
+                        _ = await HuaweiAPI.shared.markSmsRead(
+                            indices: items.enumerated().map { String($0.offset) })
+                        await reload()
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "envelope.open")
+                            .font(.system(size: 10))
+                        Text("全部已读")
+                            .font(.system(size: 11))
+                    }
+                    .foregroundStyle(.blue)
+                    .padding(.horizontal, 9).padding(.vertical, 4)
                     .background(Capsule().fill(Color.blue.opacity(0.10)))
                 }
                 .buttonStyle(.plain)
             }
-        }
-        .padding(12)
-        .glassCard(radius: 16)
-        .contextMenu {
-            Button {
-                UIPasteboard.general.string = m.content
-                store.toast("已复制内容", kind: .success)
-            } label: { Label("复制内容", systemImage: "doc.on.doc") }
 
-            Button(role: .destructive) {
-                pendingDelete = m
-            } label: { Label("删除", systemImage: "trash") }
+            if loading && items.isEmpty {
+                ProgressView().padding(.vertical, 40)
+            } else if items.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "envelope")
+                        .font(.system(size: 32))
+                        .foregroundStyle(.secondary.opacity(0.4))
+                    Text("暂无短信")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 36)
+            } else {
+                ForEach(Array(items.enumerated()), id: \.offset) { idx, m in
+                    Button {
+                        Haptic.light()
+                        if selectMode {
+                            if selected.contains(m.index) { selected.remove(m.index) }
+                            else { selected.insert(m.index) }
+                        } else {
+                            detail = m
+                        }
+                    } label: {
+                        smsRow(m, idx: idx)
+                    }
+                    .buttonStyle(.plain)
+                    if idx < items.count - 1 {
+                        Divider().opacity(0.15)
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .glassCard(radius: 22)
+    }
+
+    private func smsRow(_ m: HuaweiAPI.SmsItem, idx: Int) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(m.read ? Color.primary.opacity(0.06) : Color.blue.opacity(0.14))
+                    .frame(width: 34, height: 34)
+                Image(systemName: m.read ? "envelope" : "envelope.badge.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(m.read ? Color.secondary : Color.blue)
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 5) {
+                    Text(m.phone)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                    if !m.read {
+                        Circle().fill(Color.blue).frame(width: 5, height: 5)
+                    }
+                    Spacer()
+                    Text(m.date)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                }
+                Text(m.content)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+            }
+
+            if selectMode {
+                Image(systemName: selected.contains(m.index) ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 18))
+                    .foregroundStyle(selected.contains(m.index) ? Color.blue : Color.secondary.opacity(0.4))
+            }
+        }
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+    }
+
+    // MARK: 详情
+
+    private func detailSheet(_ m: HuaweiAPI.SmsItem) -> some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(m.phone)
+                                .font(.system(size: 17, weight: .bold))
+                            Text(m.date)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text("设备")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.purple)
+                            .padding(.horizontal, 7).padding(.vertical, 2)
+                            .background(Capsule().fill(Color.purple.opacity(0.14)))
+                    }
+
+                    // 提取链接
+                    if let link = extractURL(m.content) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("链接")
+                                    .font(.system(size: 9.5))
+                                    .foregroundStyle(.secondary)
+                                Text(link)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.blue)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            Button {
+                                Haptic.light()
+                                UIPasteboard.general.string = link
+                                store.toast("已复制", kind: .success)
+                            } label: {
+                                HStack(spacing: 3) {
+                                    Image(systemName: "doc.on.doc").font(.system(size: 10))
+                                    Text("复制").font(.system(size: 11))
+                                }
+                                .foregroundStyle(.blue)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(Color.blue.opacity(0.08))
+                        )
+                    }
+
+                    Text(m.content)
+                        .font(.system(size: 13))
+                        .textSelection(.enabled)
+
+                    HStack(spacing: 10) {
+                        actionBtn("复制全文", "doc.on.doc", .blue) {
+                            UIPasteboard.general.string = m.content
+                            store.toast("已复制", kind: .success)
+                        }
+                        actionBtn("回复", "arrowshape.turn.up.left", .green) {
+                            composeTo = m.phone
+                            composeText = ""
+                            detail = nil
+                            showCompose = true
+                        }
+                        actionBtn("删除", "trash", .red) {
+                            Task {
+                                let ok = await HuaweiAPI.shared.deleteSms(indices: [m.index])
+                                store.toast(ok ? "已删除" : "删除失败",
+                                            kind: ok ? .success : .error)
+                                detail = nil
+                                await reload()
+                            }
+                        }
+                    }
+                }
+                .padding(16)
+            }
+            .navigationTitle("短信详情")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("关闭") { detail = nil }
+                }
+            }
         }
     }
 
-    private var emptyView: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "message")
-                .font(.system(size: 40, weight: .light))
-                .foregroundStyle(.secondary.opacity(0.4))
-            Text("暂无短信")
-                .font(.system(size: 14))
-                .foregroundStyle(.secondary)
-            Text("下拉可重新读取")
-                .font(.system(size: 11.5))
-                .foregroundStyle(.secondary.opacity(0.7))
+    private func actionBtn(_ title: String, _ icon: String, _ color: Color,
+                           action: @escaping () -> Void) -> some View {
+        Button {
+            Haptic.light()
+            action()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: icon).font(.system(size: 11))
+                Text(title).font(.system(size: 12))
+            }
+            .foregroundStyle(color)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(color.opacity(0.12))
+            )
         }
-        .padding(.top, 70)
+        .buttonStyle(.plain)
+    }
+
+    private func extractURL(_ s: String) -> String? {
+        guard let r = s.range(of: "https?://[^\\s，。]+", options: .regularExpression) else { return nil }
+        return String(s[r])
     }
 
     // MARK: 发送
@@ -154,17 +392,14 @@ struct HuaweiSmsView: View {
     private var composeSheet: some View {
         NavigationStack {
             Form {
-                Section {
-                    TextField("号码，多个用逗号分隔", text: $composeTo)
-                        .keyboardType(.numbersAndPunctuation)
-                        .textInputAutocapitalization(.never)
-                } header: { Text("收件人") }
-
-                Section {
-                    TextEditor(text: $composeText)
-                        .frame(minHeight: 110)
-                        .font(.system(size: 14))
-                } header: { Text("内容") }
+                Section("收件人") {
+                    TextField("多个号码用分号或逗号分隔", text: $composeTo, axis: .vertical)
+                        .lineLimit(1...3)
+                }
+                Section("内容") {
+                    TextField("短信内容", text: $composeText, axis: .vertical)
+                        .lineLimit(4...8)
+                }
             }
             .navigationTitle("发送短信")
             .navigationBarTitleDisplayMode(.inline)
@@ -176,10 +411,9 @@ struct HuaweiSmsView: View {
                     Button {
                         Task { await send() }
                     } label: {
-                        if sending { ProgressView().scaleEffect(0.8) }
-                        else { Text("发送") }
+                        if sending { ProgressView() } else { Text("发送") }
                     }
-                    .disabled(sending || composeTo.isEmpty || composeText.isEmpty)
+                    .disabled(composeTo.isEmpty || composeText.isEmpty || sending)
                 }
             }
         }
@@ -187,52 +421,26 @@ struct HuaweiSmsView: View {
 
     private func send() async {
         sending = true
-        let nums = composeTo
-            .split(whereSeparator: { $0 == "," || $0 == "，" || $0 == ";" || $0 == " " })
-            .map { String($0).trimmingCharacters(in: .whitespaces) }
+        defer { sending = false }
+        let nums = composeTo.components(separatedBy: CharacterSet(charactersIn: ";,，；"))
+            .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
         let ok = await HuaweiAPI.shared.sendSms(to: nums, text: composeText)
-        sending = false
         if ok {
-            store.toast("短信已发送", kind: .success)
+            store.toast("已发送", kind: .success)
             showCompose = false
             await reload()
         } else {
-            store.toast(HuaweiAPI.shared.lastErrorText.isEmpty
-                        ? "发送失败" : HuaweiAPI.shared.lastErrorText, kind: .error)
+            store.toast("发送失败", kind: .error)
         }
     }
+
+    // MARK: 加载
 
     private func reload() async {
         loading = true
-        let list = await HuaweiAPI.shared.fetchSms()
-        items = list
-        loading = false
-    }
-
-    // MARK: 工具
-
-    /// 从短信里提取 4-8 位验证码
-    private func verificationCode(_ s: String) -> String? {
-        let pattern = "(?<![0-9])([0-9]{4,8})(?![0-9])"
-        guard let re = try? NSRegularExpression(pattern: pattern) else { return nil }
-        let range = NSRange(s.startIndex..., in: s)
-        // 需要上下文里有「验证码 / 校验码 / code」字样才认为是验证码
-        let lower = s.lowercased()
-        guard lower.contains("验证码") || lower.contains("校验码")
-                || lower.contains("动态码") || lower.contains("code") else { return nil }
-        guard let m = re.firstMatch(in: s, range: range),
-              let r = Range(m.range(at: 1), in: s) else { return nil }
-        return String(s[r])
-    }
-
-    private func shortDate(_ s: String) -> String {
-        // 2024-01-02 12:34:56 → 01-02 12:34
-        if s.count >= 16 {
-            let idx = s.index(s.startIndex, offsetBy: 5)
-            let idx2 = s.index(s.startIndex, offsetBy: 16)
-            return String(s[idx..<idx2])
-        }
-        return s
+        defer { loading = false }
+        counts = await HuaweiAPI.shared.fetchSmsCount()
+        items = await HuaweiAPI.shared.fetchSms(page: 1, count: 50)
     }
 }
