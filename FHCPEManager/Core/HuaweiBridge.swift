@@ -585,6 +585,10 @@ final class HuaweiBridge: NSObject, ObservableObject {
                     log("④ 探针返回空")
                 } else {
                     ready = true
+                    // 保存会话，下次免登录
+                    if !sessionCookie.isEmpty {
+                        SessionStore.save(sessionCookie, host: host, vendor: "huawei")
+                    }
                     log("④ 探针通过 (\(probe.count) 项) · ✓ 登录成功")
                     return true
                 }
@@ -648,10 +652,10 @@ final class HuaweiBridge: NSObject, ObservableObject {
         """
         _ = await evalSync(kick, timeout: 3)
 
-        // 轮询最多 12 秒
+        // 轮询：0.15 秒一次，最多 3 秒
         var s: String? = nil
-        for _ in 0..<24 {
-            try? await Task.sleep(nanoseconds: 500_000_000)
+        for _ in 0..<20 {
+            try? await Task.sleep(nanoseconds: 150_000_000)
             if let r = await evalSync("window.__hwRes && window.__hwRes['\(tok)'] || ''") as? String,
                !r.isEmpty {
                 s = r
@@ -715,8 +719,8 @@ final class HuaweiBridge: NSObject, ObservableObject {
         _ = await evalSync(kick, timeout: 3)
 
         var s: String? = nil
-        for _ in 0..<30 {
-            try? await Task.sleep(nanoseconds: 500_000_000)
+        for _ in 0..<20 {
+            try? await Task.sleep(nanoseconds: 150_000_000)
             if let r = await evalSync("window.__hwRes && window.__hwRes['\(tok)'] || ''") as? String,
                !r.isEmpty {
                 s = r
@@ -1009,5 +1013,108 @@ extension HuaweiBridge: WKNavigationDelegate {
             }
         }
         return out
+    }
+
+    /// 批量并发取数：一次 JS 调用把所有接口都发出去，再一起等
+    func getBatch(_ aliases: [String]) async -> [String: [String: Any]] {
+        let tok = "batch_\(Int(Date().timeIntervalSince1970 * 1000))"
+        let aliasJSON = (try? JSONSerialization.data(withJSONObject: aliases))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+
+        let kick = """
+        (function(){
+          try {
+            var app = document.querySelector('#app');
+            var gp = app && app.__vue_app__ && app.__vue_app__.config.globalProperties;
+            var R = gp && gp.$request;
+            window.__hwRes = window.__hwRes || {};
+            if (!R) { window.__hwRes['\(tok)'] = JSON.stringify({}); return 'none'; }
+            var list = \(aliasJSON);
+            var done = 0, out = {};
+            window.__hwRes['\(tok)'] = '';
+            list.forEach(function(a){
+              R.$get(a, {}).then(function(r){
+                var v;
+                if (r && r.error) v = {__err: String(r.error.code||'?')};
+                else v = (r && r.response !== undefined ? r.response : r) || {};
+                out[a] = v;
+              }).catch(function(e){
+                out[a] = {__err: String(e && e.message)};
+              }).then(function(){
+                done++;
+                if (done === list.length) {
+                  window.__hwRes['\(tok)'] = JSON.stringify(out);
+                }
+              });
+            });
+            return 'kicked';
+          } catch(e) {
+            window.__hwRes['\(tok)'] = JSON.stringify({});
+            return 'exc';
+          }
+        })()
+        """
+        _ = await evalSync(kick, timeout: 3)
+
+        var raw: String? = nil
+        for _ in 0..<40 {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            if let r = await evalSync("window.__hwRes && window.__hwRes['\(tok)'] || ''") as? String,
+               !r.isEmpty {
+                raw = r
+                break
+            }
+        }
+        guard let raw,
+              let d = raw.data(using: .utf8),
+              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
+            log("   batch 超时或解析失败")
+            return [:]
+        }
+        var result: [String: [String: Any]] = [:]
+        for (k, v) in o {
+            if let item = v as? [String: Any] { result[k] = item }
+        }
+        return result
+    }
+
+    /// 用保存的会话尝试免登录
+    /// 返回 true 表示会话仍有效
+    func tryRestoreSession(host: String) async -> Bool {
+        guard let saved = SessionStore.load(vendor: "huawei", host: host) else {
+            return false
+        }
+        self.host = host
+        sessionCookie = saved
+        loggedInNative = false
+        trace.removeAll()
+        log("尝试复用会话…")
+
+        // 先拿新 token（沿用旧 cookie）
+        guard let url = URL(string: "http://\(host)/api/webserver/SesTokInfo") else { return false }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 5
+        req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)", forHTTPHeaderField: "User-Agent")
+        req.setValue("Cookie", saved)
+        guard let (d, _) = try? await URLSession.shared.data(for: req),
+              let body = String(data: d, encoding: .utf8),
+              let tk = Self.tag(body, "TokInfo") else {
+            log("  会话探测失败（无响应）")
+            SessionStore.clear(vendor: "huawei")
+            return false
+        }
+        csrfToken = Self.unesc(tk)
+
+        // 用这个 token 探一次数据
+        let probe = await get("monitoringStatus")
+        if probe["__err"] != nil || probe.isEmpty {
+            log("  会话已失效")
+            SessionStore.clear(vendor: "huawei")
+            return false
+        }
+
+        ready = true
+        log("✓ 会话有效，免登录成功")
+        return true
     }
 }
