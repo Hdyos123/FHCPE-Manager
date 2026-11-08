@@ -60,46 +60,33 @@ private struct GlassBackdrop: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        GeometryReader { geo in
-            let size = geo.size
-            ZStack {
-                // 注意：不再使用 iOS 26 的 glassEffect。
-                // 实测在 iOS 26 上会与下方的实体感 / 高光层叠加，
-                // 产生白色斜纹渲染异常，故统一走 shader / 材质方案。
-                if #available(iOS 17.0, *) {
-                    Rectangle()
-                        .fill(.ultraThinMaterial)
-                        .layerEffect(
-                            ShaderLibrary.liquidGlassRefraction(
-                                .float2(Float(size.width), Float(size.height)),
-                                .float(radius),
-                                .float(26),
-                                .float(strong ? 16 : 11),
-                                .float3(Float(tintRGB.0), Float(tintRGB.1), Float(tintRGB.2)),
-                                .float(scheme == .dark ? 0.16 : 0.06),
-                                .float(.pi * 1.25)
-                            ),
-                            maxSampleOffset: CGSize(width: 24, height: 24)
-                        )
-                } else {
-                    Rectangle().fill(.ultraThinMaterial)
-                }
+        ZStack {
+            // 基础毛玻璃
+            Rectangle().fill(.ultraThinMaterial)
 
-                // 实体感
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .fill(scheme == .dark
-                          ? Color.white.opacity(strong ? 0.055 : 0.032)
-                          : Color.white.opacity(strong ? 0.50 : 0.38))
+            // 实体感：给卡片一点"厚度"
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(scheme == .dark
+                      ? Color.white.opacity(strong ? 0.055 : 0.032)
+                      : Color.white.opacity(strong ? 0.50 : 0.38))
 
-                // 对角高光
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .fill(LinearGradient(
-                        colors: [
-                            Color.white.opacity(scheme == .dark ? 0.09 : 0.50),
-                            .clear
-                        ],
-                        startPoint: .topLeading, endPoint: .bottomTrailing))
-            }
+            // 对角高光
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(LinearGradient(
+                    colors: [
+                        Color.white.opacity(scheme == .dark ? 0.09 : 0.50),
+                        .clear
+                    ],
+                    startPoint: .topLeading, endPoint: .bottomTrailing))
+
+            // 顶部细高光
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(LinearGradient(
+                    colors: [Color.white.opacity(scheme == .dark ? 0.10 : 0.55), .clear],
+                    startPoint: .top, endPoint: .center))
+                .mask(RoundedRectangle(cornerRadius: radius, style: .continuous)
+                        .frame(height: 1.5)
+                        .frame(maxHeight: .infinity, alignment: .top))
         }
     }
 }
