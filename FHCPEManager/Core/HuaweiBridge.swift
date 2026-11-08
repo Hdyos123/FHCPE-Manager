@@ -602,30 +602,24 @@ final class HuaweiBridge: NSObject, ObservableObject {
 
     /// GET 请求（用页面内部别名，如 hostList / singal / monitoringStatus）
     func get(_ alias: String) async -> [String: Any] {
+        // 用 evalAsync 直接等 Promise，不依赖 __hwCall
         let js = """
-        function(){
-          return new Promise(function(resolve){
-            try {
-              var app = document.querySelector('#app');
-              var gp = app && app.__vue_app__ && app.__vue_app__.config.globalProperties;
-              var R = gp && gp.$request;
-              if (!R) { resolve(JSON.stringify({__err:'NO_REQUEST'})); return; }
-              R.$get('\(jsEscape(alias))', {}).then(function(r){
-                if (r && r.error) {
-                  resolve(JSON.stringify({__err:String(r.error.code||'?')}));
-                  return;
-                }
-                var o = r && r.response !== undefined ? r.response : r;
-                resolve(JSON.stringify(o || {}));
-              }).catch(function(e){
-                resolve(JSON.stringify({__err:String(e && e.message)}));
-              });
-            } catch(e) { resolve(JSON.stringify({__err:'EXC:'+e.message})); }
+        (function(){
+          var app = document.querySelector('#app');
+          var gp = app && app.__vue_app__ && app.__vue_app__.config.globalProperties;
+          var R = gp && gp.$request;
+          if (!R) { return JSON.stringify({__err:'NO_REQUEST'}); }
+          return R.$get('\(jsEscape(alias))', {}).then(function(r){
+            if (r && r.error) { return JSON.stringify({__err:String(r.error.code||'?')}); }
+            var o = r && r.response !== undefined ? r.response : r;
+            return JSON.stringify(o || {});
+          }).catch(function(e){
+            return JSON.stringify({__err:String(e && e.message)});
           });
-        }
+        })()
         """
-        guard let s = await jsCall(js, timeout: 12) as? String else {
-            log("   \(alias) → jsCall 无返回（超时或异常）")
+        guard let s = await evalAsync(js, timeout: 12) as? String else {
+            log("   \(alias) → evalAsync 无返回")
             return ["__err": "no_return"]
         }
         guard let d = s.data(using: .utf8),
@@ -754,6 +748,36 @@ final class HuaweiBridge: NSObject, ObservableObject {
         }
     }
 
+
+
+    /// 直接执行 JS 并等待 Promise（不依赖 __hwCall 注入）
+    /// 用于登录后页面重载、注入脚本失效的场景
+    private func evalAsync(_ js: String, timeout: TimeInterval = 12) async -> Any? {
+        guard let wv = webView else { return nil }
+
+        let work = Task { @MainActor () -> Any? in
+            await withCheckedContinuation { (cont: CheckedContinuation<Any?, Never>) in
+                wv.evaluateJavaScript(js) { res, err in
+                    if let e = err {
+                        Task { @MainActor in self.log("evalAsync 错误: \(e.localizedDescription)") }
+                    }
+                    cont.resume(returning: res)
+                }
+            }
+        }
+
+        let timer = Task { try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000)) }
+
+        return await withTaskGroup(of: AnyBox?.self) { group in
+            group.addTask { AnyBox(await work.value) }
+            group.addTask { _ = await timer.value; return nil }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            work.cancel()
+            timer.cancel()
+            return first?.value
+        }
+    }
 
     /// 直接求值（不依赖注入的 __hwCall）
     /// 用 withThrowingTaskGroup 做超时竞速，避免主线程被 asyncAfter 卡住
