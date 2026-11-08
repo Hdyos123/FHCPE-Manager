@@ -447,22 +447,22 @@ final class HuaweiBridge: NSObject, ObservableObject {
     /// 注意：$request 在登录页也存在，不能作为判据。
     /// 正确标准：hash 不是 login，且输入框 ≤ 1 个。
     private func isLoggedIn() async -> Bool {
-        let r = await jsCall("""
-        function(){
-          try {
-            var h = (location.hash || '').toLowerCase();
-            var n = document.querySelectorAll('input').length;
-            if (h.indexOf('login') >= 0) return 'no';
-            if (n >= 2) return 'no';
-            var app = document.querySelector('#app');
-            if (!app || !app.__vue_app__) return 'no';
-            var gp = app.__vue_app__.config.globalProperties;
-            if (!gp || !gp.$request) return 'no';
-            return 'yes';
-          } catch(e) { return 'err'; }
-        }
-        """)
-        return (r as? String) == "yes"
+        // 用 evalSync，不依赖注入
+        let hashV = (await evalSync("location.hash")) as? String ?? ""
+        let h = hashV.lowercased()
+
+        // hash 为空说明页面正在重载，不算完成
+        if h.isEmpty { return false }
+        if h.contains("login") { return false }
+
+        // 必须已经进入 home 页
+        if !h.contains("home") { return false }
+
+        let nRaw = await evalSync("document.querySelectorAll('input').length")
+        let n = (nRaw as? Int) ?? ((nRaw as? NSNumber)?.intValue ?? 99)
+        if n >= 2 { return false }
+
+        return true
     }
 
     private func doLogin() async -> Bool {
@@ -494,7 +494,11 @@ final class HuaweiBridge: NSObject, ObservableObject {
         """
         let r = await jsCall(body, timeout: 18)
         let hash = (r as? String) ?? ""
-        log("③ 点击登录后 hash=\(hash)")
+        log("③ 点击登录后 hash=\(hash.isEmpty ? "(空)" : hash)")
+
+        // 记录页面完整状态，便于诊断
+        let st = (await evalSync("JSON.stringify({h:location.hash,n:document.querySelectorAll('input').length,url:location.href})")) as? String
+        log("③ 页面状态: " + (st ?? "nil"))
 
         if hash.hasPrefix("ERR") {
             lastError = "页面异常：\(hash)"
@@ -507,27 +511,43 @@ final class HuaweiBridge: NSObject, ObservableObject {
 
         // 等页面跳转完成
         var lastProbe = ""
-        for i in 0..<20 {
-            let logged = await isLoggedIn()
-            if logged {
+        var lastHash = ""
+        for i in 0..<30 {
+            let h = (await evalSync("location.hash")) as? String ?? ""
+            let n = (await evalSync("document.querySelectorAll('input').length")) as? Int ?? -1
+            lastHash = h
+
+            if i % 4 == 0 || h.contains("home") {
+                log("④ \(i/2)s · hash=\(h.isEmpty ? "(空)" : h) · inputs=\(n)")
+            }
+
+            // 页面重载中：hash 为空或仍在 login 页
+            if h.isEmpty || h.lowercased().contains("login") {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                continue
+            }
+
+            // 已进 home 页
+            if h.lowercased().contains("home") && n <= 1 {
+                // 等页面 Vue 就绪
+                try? await Task.sleep(nanoseconds: 800_000_000)
                 let probe = await get("monitoringStatus")
                 if let err = probe["__err"] as? String {
                     lastProbe = err
-                    log("④ 探针失败 code=\(err) (\(i)/2s)")
+                    log("④ 探针失败 code=\(err)")
                 } else if !probe.isEmpty {
                     ready = true
                     log("④ 探针通过 · ✓ 登录成功")
+                    _ = await evalSync("location.hash='#/smallHome'")
                     return true
                 }
-            } else if i % 4 == 0 {
-                log("④ 等待跳转 \(i/2)s · hash=\(hash)")
             }
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
 
-        lastError = "登录失败：hash=\(hash)"
+        lastError = "登录失败：最终 hash=\(lastHash.isEmpty ? "(空)" : lastHash)"
             + (lastProbe.isEmpty ? "" : " 探针=\(lastProbe)")
-        log("④ ✗ 登录未完成 · hash=\(hash) · 探针=\(lastProbe)")
+        log("④ ✗ 登录未完成 · 最终 hash=\(lastHash) · 探针=\(lastProbe)")
         return false
     }
 
