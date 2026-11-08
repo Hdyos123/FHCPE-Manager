@@ -356,6 +356,48 @@ extension HuaweiAPI {
         }
     }
 
+
+    /// 设置网络首选（auto / 5G / 4G）
+    func setNetPrefer(_ p: String) async -> Bool {
+        let v: String
+        switch p {
+        case "5G": v = "02"
+        case "4G": v = "01"
+        default:   v = "00"
+        }
+        return await setNetMode(v)
+    }
+
+    /// 提交 5G NR 锁定
+    /// mode: 0 锁频段 1 锁频点 2 锁小区 3 不锁定
+    func lockNR(mode: Int, band: String, freq: String,
+                cellBand: String, cellFreq: String, cellPci: String) async -> Bool {
+        var bandS = "", freqS = "", cellS = ""
+        switch mode {
+        case 0:
+            bandS = band.replacingOccurrences(of: " ", with: "")
+        case 1:
+            freqS = freq.replacingOccurrences(of: " ", with: "")
+        case 2:
+            let b = cellBand.lowercased().replacingOccurrences(of: "n", with: "")
+            cellS = "\(b),\(cellFreq),\(cellPci)"
+        default:
+            break
+        }
+
+        let body = "<request><NRBandLock>\(bandS)</NRBandLock>"
+            + "<NRFreqLock>\(freqS)</NRFreqLock>"
+            + "<NRCellLock>\(cellS)</NRCellLock></request>"
+
+        do {
+            _ = try await request("POST", "/api/net/lock-freq", body: body)
+            return true
+        } catch {
+            lastErrorText = msg(error)
+            return false
+        }
+    }
+
     // MARK: 工具
 
     func msg(_ e: Error) -> String {
