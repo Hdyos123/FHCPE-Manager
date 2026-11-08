@@ -405,6 +405,9 @@ struct LoginView: View {
         store.errorText = nil
         addLog("开始连接 \(v.displayName) @ \(h)")
 
+        // 清空上次的桥接日志
+        if v == .huawei { HuaweiBridge.shared.clearTrace() }
+
         var p = CpeProfile.make(vendor: v)
         p.host = h
         p.user = u
@@ -424,9 +427,17 @@ struct LoginView: View {
             store.startPolling()
         } else {
             addLog("✗ " + (store.errorText ?? "连接失败"))
-            // OPPO 桥接日志也贴出来
+            // 把桥接层的详细日志贴出来
             if v == .oppo {
                 for t in OppoBridge.shared.trace { addLog("  " + t) }
+            }
+            if v == .huawei {
+                let tr = HuaweiBridge.shared.trace
+                if tr.isEmpty {
+                    addLog("  (桥接无日志)")
+                } else {
+                    for t in tr { addLog("  " + t) }
+                }
             }
         }
     }
