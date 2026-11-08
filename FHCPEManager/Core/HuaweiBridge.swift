@@ -618,9 +618,49 @@ final class HuaweiBridge: NSObject, ObservableObject {
           });
         })()
         """
-        guard let s = await evalAsync(js, timeout: 12) as? String else {
-            log("   \(alias) → evalAsync 无返回")
-            return ["__err": "no_return"]
+        // WKWebView 不支持直接等 Promise，改为：启动后存全局变量，轮询读取
+        let tok = "\(alias)_\(Int(Date().timeIntervalSince1970 * 1000))"
+        let kick = """
+        (function(){
+          try {
+            var app = document.querySelector('#app');
+            var gp = app && app.__vue_app__ && app.__vue_app__.config.globalProperties;
+            var R = gp && gp.$request;
+            window.__hwRes = window.__hwRes || {};
+            if (!R) { window.__hwRes['\(tok)'] = JSON.stringify({__err:'NO_REQUEST'}); return 'kicked'; }
+            R.$get('\(jsEscape(alias))', {}).then(function(r){
+              var out;
+              if (r && r.error) out = {__err: String(r.error.code||'?')};
+              else {
+                var o = r && r.response !== undefined ? r.response : r;
+                out = o || {};
+              }
+              window.__hwRes['\(tok)'] = JSON.stringify(out);
+            }).catch(function(e){
+              window.__hwRes['\(tok)'] = JSON.stringify({__err:String(e && e.message)});
+            });
+            return 'kicked';
+          } catch(e) {
+            window.__hwRes['\(tok)'] = JSON.stringify({__err:'EXC:'+e.message});
+            return 'exc';
+          }
+        })()
+        """
+        _ = await evalSync(kick, timeout: 3)
+
+        // 轮询最多 12 秒
+        var s: String? = nil
+        for _ in 0..<24 {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if let r = await evalSync("window.__hwRes && window.__hwRes['\(tok)'] || ''") as? String,
+               !r.isEmpty {
+                s = r
+                break
+            }
+        }
+        guard let s else {
+            log("   \(alias) → 轮询超时")
+            return ["__err": "timeout"]
         }
         guard let d = s.data(using: .utf8),
               let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
@@ -644,32 +684,50 @@ final class HuaweiBridge: NSObject, ObservableObject {
         let bd = (try? JSONSerialization.data(withJSONObject: body)) ?? Data("{}".utf8)
         let bs = String(data: bd, encoding: .utf8) ?? "{}"
 
-        let js = """
-        function(){
-          return new Promise(function(resolve){
-            try {
-              var app = document.querySelector('#app');
-              var gp = app && app.__vue_app__ && app.__vue_app__.config.globalProperties;
-              var R = gp && gp.$request;
-              if (!R) { resolve(JSON.stringify({__err:'NO_REQUEST'})); return; }
-              R.$post('\(jsEscape(alias))', \(bs)).then(function(r){
-                if (r && r.error) {
-                  resolve(JSON.stringify({__err:String(r.error.code||'?')}));
-                  return;
-                }
+        // 同 get：启动后存全局，轮询读取
+        let tok = "\(alias)_\(Int(Date().timeIntervalSince1970 * 1000))"
+        let kick = """
+        (function(){
+          try {
+            var app = document.querySelector('#app');
+            var gp = app && app.__vue_app__ && app.__vue_app__.config.globalProperties;
+            var R = gp && gp.$request;
+            window.__hwRes = window.__hwRes || {};
+            if (!R) { window.__hwRes['\(tok)'] = JSON.stringify({__err:'NO_REQUEST'}); return 'kicked'; }
+            R.$post('\(jsEscape(alias))', \(bs)).then(function(r){
+              var out;
+              if (r && r.error) out = {__err: String(r.error.code||'?')};
+              else {
                 var o = r && r.response !== undefined ? r.response : r;
-                resolve(JSON.stringify(o || {}));
-              }).catch(function(e){
-                resolve(JSON.stringify({__err:String(e && e.message)}));
-              });
-            } catch(e) { resolve(JSON.stringify({__err:'EXC:'+e.message})); }
-          });
-        }
+                out = o || {};
+              }
+              window.__hwRes['\(tok)'] = JSON.stringify(out);
+            }).catch(function(e){
+              window.__hwRes['\(tok)'] = JSON.stringify({__err:String(e && e.message)});
+            });
+            return 'kicked';
+          } catch(e) {
+            window.__hwRes['\(tok)'] = JSON.stringify({__err:'EXC:'+e.message});
+            return 'exc';
+          }
+        })()
         """
-        guard let s = await jsCall(js, timeout: 15) as? String,
+        _ = await evalSync(kick, timeout: 3)
+
+        var s: String? = nil
+        for _ in 0..<30 {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if let r = await evalSync("window.__hwRes && window.__hwRes['\(tok)'] || ''") as? String,
+               !r.isEmpty {
+                s = r
+                break
+            }
+        }
+        guard let s,
               let d = s.data(using: .utf8),
               let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
-            return [:]
+            log("   \(alias) POST → 轮询超时")
+            return ["__err": "timeout"]
         }
         if let e = o["__err"] as? String { return ["__err": e] }
         return o
