@@ -15,6 +15,8 @@ final class HuaweiBridge: NSObject, ObservableObject {
     static let shared = HuaweiBridge()
 
     @Published var ready = false
+    /// 是否已进入开发者模式
+    private(set) var devMode = false
     @Published var lastError: String?
 
     private var webView: WKWebView?
@@ -1100,7 +1102,7 @@ extension HuaweiBridge: WKNavigationDelegate {
         var req = URLRequest(url: url)
         req.timeoutInterval = 5
         req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)", forHTTPHeaderField: "User-Agent")
-        req.setValue("Cookie", saved)
+        req.setValue(saved, forHTTPHeaderField: "Cookie")
         guard let (d, _) = try? await URLSession.shared.data(for: req),
               let body = String(data: d, encoding: .utf8),
               let tk = Self.tag(body, "TokInfo") else {
@@ -1124,8 +1126,6 @@ extension HuaweiBridge: WKNavigationDelegate {
     }
 
     // MARK: 开发者模式（解锁小区列表等高级接口）
-
-    private(set) var devMode = false
 
     /// 登录后进入开发者模式
     /// 华为 H153 的小区列表 / 锁频配置需要开发者权限才能读
