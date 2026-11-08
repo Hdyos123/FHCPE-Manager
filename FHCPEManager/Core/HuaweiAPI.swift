@@ -212,7 +212,13 @@ final class HuaweiAPI {
         self.user = user
         self.password = password
 
-        // 华为所有请求都要加密，只能借页面自己的 $request
+        // ① 先试复用上次的会话（免登录，通常 1 秒内）
+        if await HuaweiBridge.shared.tryRestoreSession(host: host) {
+            loggedIn = true
+            return
+        }
+
+        // ② 会话无效，走完整登录
         let ok = await HuaweiBridge.shared.login(host: host, user: user, password: password)
         guard ok else {
             let reason = (await HuaweiBridge.shared.lastError) ?? "无法连接设备"
@@ -420,8 +426,17 @@ final class HuaweiAPI {
         guard loggedIn else { return [:] }
         var v: [String: String] = [:]
 
+        // 一次性批量取全部接口（并发），避免逐个等待
+        let batch = await HuaweiBridge.shared.getBatch([
+            "singal", "monitoringStatus", "monitoringTraffic", "mounthTraffic",
+            "netCurrentPlmn", "deviceInformation", "systemDeviceinfoex",
+            "wlanStatusSwitch", "connection", "netMode"
+        ])
+
+        func b(_ k: String) -> [String: Any] { batch[k] ?? [:] }
+
         // ① 信号（华为字段带 nr 前缀，单位含在值里）
-        let sig = await bridgeGet("singal")
+        let sig = b("singal")
         if let err = sig["__err"] as? String {
             v["__sigErr"] = err
         } else {
@@ -459,7 +474,7 @@ final class HuaweiAPI {
         }
 
         // ② 运行状态
-        let st = await bridgeGet("monitoringStatus")
+        let st = b("monitoringStatus")
         if let t = st["CurrentNetworkType"] as? String { v["netmode"] = Self.netType(t) }
         if let t = st["SignalIconNr"] as? String { v["signalIcon"] = t }
             else if let t = st["SignalIcon"] as? String { v["signalIcon"] = t }
@@ -476,7 +491,7 @@ final class HuaweiAPI {
         if let t = st["flymode"] as? String { v["airplane"] = t }
 
         // ③ 实时与累计流量
-        let tr = await bridgeGet("monitoringTraffic")
+        let tr = b("monitoringTraffic")
         if let t = tr["CurrentDownloadRate"] as? String, let d = Double(t) {
             v["speedRx"] = String(Int(d))     // 字节/秒
         }
@@ -492,7 +507,7 @@ final class HuaweiAPI {
         }
 
         // ④ 本月
-        let mo = await bridgeGet("mounthTraffic")
+        let mo = b("mounthTraffic")
         if let t = mo["CurrentMonthDownload"] as? String { v["monthRx"] = t }
         if let t = mo["CurrentMonthUpload"] as? String { v["monthTx"] = t }
         if let d = Double(v["monthRx"] ?? "0"), let u = Double(v["monthTx"] ?? "0") {
@@ -504,13 +519,13 @@ final class HuaweiAPI {
         if let t = mo["MonthLastClearTime"] as? String { v["monthStart"] = t }
 
         // ⑤ 运营商
-        let pl = await bridgeGet("netCurrentPlmn")
+        let pl = b("netCurrentPlmn")
         if let t = pl["FullName"] as? String, !t.isEmpty { v["carrier"] = t }
         else if let t = pl["ShortName"] as? String, !t.isEmpty { v["carrier"] = t }
         if let t = pl["Numeric"] as? String { v["plmn"] = t }
 
         // ⑥ 设备信息
-        let di = await bridgeGet("deviceInformation")
+        let di = b("deviceInformation")
         if let t = di["DeviceName"] as? String { v["model"] = t }
             else if let t = di["devicename"] as? String { v["model"] = t }
         if let t = di["SerialNumber"] as? String { v["sn"] = t }
@@ -523,7 +538,7 @@ final class HuaweiAPI {
         if let t = di["DeviceType"] as? String { v["deviceType"] = t }
 
         // 设备扩展信息（硬件版本等）
-        let ex = await bridgeGet("systemDeviceinfoex")
+        let ex = b("systemDeviceinfoex")
         if v["hwver"] == nil, let t = ex["HardwareVersion"] as? String { v["hwver"] = t }
         if let cust = ex["custinfo"] as? [String: Any],
            let n = cust["CustDeviceName"] as? String, !n.isEmpty {
@@ -532,7 +547,7 @@ final class HuaweiAPI {
         if let t = ex["UpTime"] as? String { v["uptime2"] = t }
 
         // ⑦ WLAN 状态
-        let wl = await bridgeGet("wlanStatusSwitch")
+        let wl = b("wlanStatusSwitch")
         if let radios = wl["radios"] as? [[String: Any]] {
             for (i, r) in radios.enumerated() {
                 let key = (i == 0) ? "ssid24" : "ssid5g"
@@ -545,24 +560,36 @@ final class HuaweiAPI {
         }
 
         // ⑧ 连接信息（WAN IP）
-        let cn = await bridgeGet("connection")
+        let cn = b("connection")
         if let t = cn["IPv4Address"] as? String { v["wanIP"] = t }
         if let t = cn["RoamAutoConnectEnable"] as? String { v["roamAuto"] = t }
 
         // ⑨ 网络模式
-        let nm = await bridgeGet("netMode")
+        let nm = b("netMode")
         if let t = nm["NetworkMode"] as? String { v["netModeRaw"] = t }
         if let t = nm["NetworkBand"] as? String { v["netBand"] = t }
 
         return v
     }
 
-    /// 轻量：只取速率与今日流量（每秒调用）
+    /// 最近一次取到的流量数据（避免重复请求）
+    private var lastTraffic: [String: Any] = [:]
+    private var lastTrafficAt: Date = .distantPast
+
+    /// 轻量：只取速率（复用 2 秒内的缓存）
     func fetchRates() async -> (rx: Double, tx: Double, todayRx: Double, todayTx: Double, uptime: Int) {
         guard loggedIn else { return (0,0,0,0,0) }
-        let t = await bridgeGet("monitoringTraffic")
+
+        if Date().timeIntervalSince(lastTrafficAt) > 2 || lastTraffic.isEmpty {
+            let b = await HuaweiBridge.shared.getBatch(["monitoringTraffic"])
+            if let t = b["monitoringTraffic"], !t.isEmpty {
+                lastTraffic = t
+                lastTrafficAt = Date()
+            }
+        }
+
         func d(_ k: String) -> Double {
-            Double((t[k] as? String) ?? "0") ?? 0
+            Double((lastTraffic[k] as? String) ?? "0") ?? 0
         }
         return (d("CurrentDownloadRate"), d("CurrentUploadRate"),
                 d("TotalDownload"), d("TotalUpload"),
