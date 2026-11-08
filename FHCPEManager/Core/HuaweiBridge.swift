@@ -352,6 +352,10 @@ final class HuaweiBridge: NSObject, ObservableObject {
 
         let wv = WKWebView(frame: .zero, configuration: cfg)
         wv.navigationDelegate = self
+        // 华为后台按 UA 区分移动版/PC 版，用标准移动版 Safari UA
+        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) "
+            + "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 "
+            + "Mobile/15E148 Safari/604.1"
         // 不能为 0，否则 WebKit 暂停 JS 执行
         wv.alpha = 0.01
         wv.isUserInteractionEnabled = false
@@ -1116,5 +1120,128 @@ extension HuaweiBridge: WKNavigationDelegate {
         ready = true
         log("✓ 会话有效，免登录成功")
         return true
+    }
+
+    // MARK: 开发者模式（解锁小区列表等高级接口）
+
+    private(set) var devMode = false
+
+    /// 登录后进入开发者模式
+    /// 华为 H153 的小区列表 / 锁频配置需要开发者权限才能读
+    func enterDeveloperMode(password: String) async -> Bool {
+        guard ready else { return false }
+        log("进入开发者模式…")
+
+        // 跳到开发者页
+        _ = await evalSync("location.hash = '#/developermode'")
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+
+        // 等输入框
+        var hasPwd = false
+        for _ in 0..<10 {
+            let r = await evalSync("!!document.querySelector('input[type=password]')")
+            hasPwd = (r as? Bool) ?? false
+            if hasPwd { break }
+            try? await Task.sleep(nanoseconds: 400_000_000)
+        }
+        guard hasPwd else {
+            log("  ✗ 开发者页未渲染登录框")
+            return false
+        }
+
+        // 填密码
+        let fill = """
+        (function(){
+          try {
+            var p = document.querySelector('input[type=password]');
+            if (!p) return 'NO_PWD';
+            var setter = Object.getOwnPropertyDescriptor(
+              window.HTMLInputElement.prototype, 'value').set;
+            setter.call(p, '\(jsEscape(password))');
+            p.dispatchEvent(new Event('input', {bubbles:true}));
+            p.dispatchEvent(new Event('change', {bubbles:true}));
+            return 'filled';
+          } catch(e) { return 'ERR'; }
+        })()
+        """
+        _ = await evalSync(fill, timeout: 3)
+        try? await Task.sleep(nanoseconds: 400_000_000)
+
+        // 点击登录
+        let click = """
+        (function(){
+          try {
+            var btn = Array.prototype.slice.call(document.querySelectorAll('button'))
+              .filter(function(b){ return (b.textContent||'').trim() === '登录'; })[0];
+            if (!btn) return 'NO_BTN';
+            btn.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, cancelable:true, view:window}));
+            btn.dispatchEvent(new MouseEvent('mouseup',   {bubbles:true, cancelable:true, view:window}));
+            btn.dispatchEvent(new MouseEvent('click',     {bubbles:true, cancelable:true, view:window}));
+            btn.click();
+            return 'clicked';
+          } catch(e) { return 'ERR'; }
+        })()
+        """
+        _ = await evalSync(click, timeout: 3)
+        try? await Task.sleep(nanoseconds: 4_000_000_000)
+
+        // 验证
+        let h = (await evalSync("location.hash")) as? String ?? ""
+        if h.contains("developermode") && !h.contains("login") {
+            devMode = true
+            log("✓ 开发者模式已进入 (\(h))")
+            return true
+        }
+        log("  ✗ 开发者模式进入失败 hash=\(h)")
+        return false
+    }
+
+    /// 读取锁频配置（含小区列表）
+    func fetchLockFreq() async -> [String: Any] {
+        await get("lockFreq")
+    }
+
+    /// 按别名取原始文本（用于 nbrcellinfo / seccellinfo 这类非 XML 结构）
+    func getRaw(_ alias: String) async -> String? {
+        guard ready else { return nil }
+        let tok = "raw_\(Int(Date().timeIntervalSince1970 * 1000))"
+
+        let kick = """
+        (function(){
+          try {
+            var app = document.querySelector('#app');
+            var gp = app && app.__vue_app__ && app.__vue_app__.config.globalProperties;
+            var R = gp && gp.$request;
+            window.__hwRes = window.__hwRes || {};
+            if (!R) { window.__hwRes['\(tok)'] = 'NO_REQUEST'; return 'x'; }
+            R.$get('\(jsEscape(alias))', {}).then(function(r){
+              if (r && r.error) {
+                window.__hwRes['\(tok)'] = 'ERR:' + r.error.code;
+                return;
+              }
+              var o = r && r.response !== undefined ? r.response : r;
+              window.__hwRes['\(tok)'] = typeof o === 'string' ? o : JSON.stringify(o);
+            }).catch(function(e){
+              window.__hwRes['\(tok)'] = 'EXC:' + (e && e.message);
+            });
+            return 'kicked';
+          } catch(e) { window.__hwRes['\(tok)'] = 'EXC'; return 'x'; }
+        })()
+        """
+        _ = await evalSync(kick, timeout: 3)
+
+        for _ in 0..<20 {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            if let r = await evalSync("window.__hwRes && window.__hwRes['\(tok)'] || ''") as? String,
+               !r.isEmpty {
+                if r.hasPrefix("ERR:") || r.hasPrefix("EXC") || r == "NO_REQUEST" {
+                    log("   \(alias) → \(r)")
+                    return nil
+                }
+                return r
+            }
+        }
+        log("   \(alias) → 轮询超时")
+        return nil
     }
 }
