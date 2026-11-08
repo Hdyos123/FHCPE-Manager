@@ -181,6 +181,7 @@ private func handleNotifyAction(_ a: NotifyAction?, store: CpeStore) async {
 }
 
 struct MainTabView: View {
+    @EnvironmentObject var store: CpeStore
     @StateObject private var router = TabRouter()
 
     private let items: [LiquidTabBar.Item] = [
