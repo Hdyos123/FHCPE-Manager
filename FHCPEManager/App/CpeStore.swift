@@ -24,6 +24,8 @@ final class CpeStore: ObservableObject {
     /// 华为慢变数据缓存
     private var hwSlowCache: [String: String] = [:]
     private var hwSlowAt: Date = .distantPast
+    /// 慢数据是否正在加载（防止并发重复请求）
+    private var hwSlowLoading = false
 
     /// OPPO 慢变数据缓存（信号/小区/设备），避免每秒触发页面重排
     private var oppoSlowCache: [String: String] = [:]
@@ -380,29 +382,42 @@ final class CpeStore: ObservableObject {
     func fetchStatus() async {
         // 华为：明文 XML 接口
         if isHuawei {
-            // 慢变数据（信号/设备信息/本月）：每 10 秒（批量请求，耗时较长）
-            var v = hwSlowCache
-            if Date().timeIntervalSince(hwSlowAt) > 10 || v.isEmpty {
-                let d = await HuaweiAPI.shared.fetchOverview()
-                if !d.isEmpty {
-                    v = d
-                    hwSlowCache = v
-                    hwSlowAt = Date()
+            // ① 慢变数据：后台异步刷新，不阻塞速率
+            let needSlow = Date().timeIntervalSince(hwSlowAt) > 8 || hwSlowCache.isEmpty
+            if needSlow, !hwSlowLoading {
+                hwSlowLoading = true
+                Task { [weak self] in
+                    let d = await HuaweiAPI.shared.fetchOverview()
+                    await MainActor.run {
+                        guard let self else { return }
+                        if !d.isEmpty {
+                            self.hwSlowCache = d
+                            self.hwSlowAt = Date()
+                            // 慢数据回来后合并进当前状态
+                            var cur = self.status.raw
+                            for (k, v) in d { cur[k] = v }
+                            self.status.raw = cur
+                        }
+                        self.hwSlowLoading = false
+                    }
                 }
             }
 
-            // 快变数据（速率/今日流量）：每次轮询
+            // ② 快变数据：每次都取（轻量，1 个接口）
             let r = await HuaweiAPI.shared.fetchRates()
-            if r.rx > 0 || r.tx > 0 || r.todayRx > 0 {
+            var v = status.raw
+            if r.rx > 0 || r.tx > 0 {
                 realtimeRx = r.rx * 8
                 realtimeTx = r.tx * 8
                 v["speedRx"] = String(Int(r.rx))
                 v["speedTx"] = String(Int(r.tx))
+            }
+            if r.todayRx > 0 || r.todayTx > 0 {
                 v["todayRx"] = String(Int(r.todayRx))
                 v["todayTx"] = String(Int(r.todayTx))
                 v["todayTotal"] = String(Int(r.todayRx + r.todayTx))
-                if r.uptime > 0 { v["uptime"] = String(r.uptime) }
             }
+            if r.uptime > 0 { v["uptime"] = String(r.uptime) }
 
             status.raw = v
             return
@@ -965,6 +980,19 @@ final class CpeStore: ObservableObject {
             return t["result"] != nil
         }
         return false
+    }
+
+
+    /// 退出登录：停轮询、清状态、回登录页
+    func logout() {
+        stopPolling()
+        if isHuawei { _ = HuaweiBridge.shared.enterDeveloperMode(password: ""); }
+        SessionStore.clear(vendor: "fiberhome")
+        SessionStore.clear(vendor: "oppo")
+        SessionStore.clear(vendor: "huawei")
+        clearAll()
+        isLoggedIn = false
+        activeProfile = nil
     }
 
     func reboot() async -> Bool {
