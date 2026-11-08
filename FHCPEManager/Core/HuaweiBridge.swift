@@ -390,7 +390,7 @@ final class HuaweiBridge: NSObject, ObservableObject {
         }
         log("WebView 已就绪")
 
-        guard let url = URL(string: "http://\(host)/") else {
+        guard let url = URL(string: "http://\(host)/#/login") else {
             lastError = "地址无效"
             return false
         }
@@ -547,7 +547,7 @@ final class HuaweiBridge: NSObject, ObservableObject {
             return false
         }
 
-        // 等页面跳转完成
+        // PC 版登录后应进入 #/home
         var lastProbe = ""
         var lastHash = ""
         for i in 0..<20 {
@@ -566,7 +566,8 @@ final class HuaweiBridge: NSObject, ObservableObject {
             }
 
             // 已进 home 页
-            if h.lowercased().contains("home") && n <= 1 {
+            let isHome = h.lowercased().contains("home")
+            if isHome && n <= 1 {
                 if i == 0 { try? await Task.sleep(nanoseconds: 1_000_000_000) }
 
                 // 探针1：$request 是否存在
@@ -1243,5 +1244,57 @@ extension HuaweiBridge: WKNavigationDelegate {
         }
         log("   \(alias) → 轮询超时")
         return nil
+    }
+
+    // MARK: 短信（读 DOM，绕开 sms-list 接口的 125003）
+
+    /// 读短信列表
+    /// 华为 PC 版的 sms-list 接口参数格式特殊，直接读渲染好的 DOM 更可靠
+    struct SmsRow {
+        var phone: String
+        var content: String
+        var date: String
+    }
+
+    func fetchSmsDom() async -> [SmsRow] {
+        guard ready else { return [] }
+
+        // 先确保在短信页
+        let h = (await evalSync("location.hash")) as? String ?? ""
+        if !h.contains("sms") {
+            _ = await evalSync("location.hash = '#/sms'")
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+        }
+
+        let js = """
+        (function(){
+          try {
+            var rows = document.querySelectorAll('tr.sms_main_page_tr');
+            var out = [];
+            for (var i = 0; i < rows.length; i++) {
+              var tds = rows[i].querySelectorAll('td');
+              if (tds.length < 3) continue;
+              var phone = (tds[0].innerText || '').trim();
+              var content = (tds[1].innerText || '').trim();
+              var date = (tds[2].innerText || '').trim();
+              if (!phone && !content) continue;
+              out.push({phone: phone, content: content, date: date});
+            }
+            return JSON.stringify(out);
+          } catch(e) { return '{"__err":"' + e.message + '"}'; }
+        })()
+        """
+        guard let raw = await evalSync(js, timeout: 8) as? String,
+              let d = raw.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: d) as? [[String: Any]] else {
+            log("  短信 DOM 解析失败")
+            return []
+        }
+        return arr.compactMap { o in
+            guard let p = o["phone"] as? String else { return nil }
+            return SmsRow(phone: p,
+                          content: (o["content"] as? String) ?? "",
+                          date: (o["date"] as? String) ?? "")
+        }
     }
 }
