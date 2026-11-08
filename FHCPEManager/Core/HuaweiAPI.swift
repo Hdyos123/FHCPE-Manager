@@ -212,12 +212,8 @@ final class HuaweiAPI {
         self.user = user
         self.password = password
 
-        // 优先用原生 SCRAM（不依赖页面 JS）
-        var ok = await HuaweiBridge.shared.nativeLogin(host: host, user: user, password: password)
-        if !ok {
-            // 兜底：走页面通道
-            ok = await HuaweiBridge.shared.login(host: host, user: user, password: password)
-        }
+        // 华为所有请求都要加密，只能借页面自己的 $request
+        let ok = await HuaweiBridge.shared.login(host: host, user: user, password: password)
         guard ok else {
             let reason = (await HuaweiBridge.shared.lastError) ?? "无法连接设备"
             lastErrorText = reason
@@ -244,13 +240,9 @@ final class HuaweiAPI {
         "convergedStatus": "/api/monitoring/converged-status",
     ]
 
-    /// 取数据：优先原生（SCRAM 登录后），失败再走页面
+    /// 取数据：全部走页面通道（自带加密）
     func bridgeGet(_ alias: String) async -> [String: Any] {
-        if let path = Self.aliasPath[alias] {
-            let r = await HuaweiBridge.shared.nativeGetPath(path)
-            if !r.isEmpty { return r }
-        }
-        return await HuaweiBridge.shared.get(alias)
+        await HuaweiBridge.shared.get(alias)
     }
 
     /// 通过桥接提交
