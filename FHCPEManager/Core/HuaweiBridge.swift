@@ -472,8 +472,10 @@ final class HuaweiBridge: NSObject, ObservableObject {
     }
 
     private func doLogin() async -> Bool {
+        // 注意：这里不再包 function(){}，而是直接执行 IIFE，
+        // 避免 __hwCall 里的 new Function 二次包装导致 this/闭包异常
         let body = """
-        function(){
+        (function(){
           return new Promise(function(resolve){
             try {
               // 华为登录页没有账号输入框，只有密码框（type=password）
@@ -485,6 +487,7 @@ final class HuaweiBridge: NSObject, ObservableObject {
               setter.call(pwd, '\(jsEscape(pass))');
               pwd.dispatchEvent(new Event('input', {bubbles:true}));
               pwd.dispatchEvent(new Event('change', {bubbles:true}));
+              window.__fillCheck = 'len=' + pwd.value.length + ' vis=' + (pwd.offsetParent !== null);
 
               setTimeout(function(){
                 var btn = Array.prototype.slice.call(
@@ -493,6 +496,7 @@ final class HuaweiBridge: NSObject, ObservableObject {
                     return t === '登录' || /^login$/i.test(t);
                   })[0];
                 if (btn) {
+                  window.__btnCheck = 'disabled=' + btn.disabled + ' text=' + (btn.textContent||'').trim();
                   btn.click();
                   // 登录成功后页面会重载，这里只等 3 秒
                   setTimeout(function(){ resolve(location.hash); }, 3000);
@@ -502,11 +506,17 @@ final class HuaweiBridge: NSObject, ObservableObject {
               }, 400);
             } catch(e) { resolve('ERR:' + e.message); }
           });
-        }
+        })()
         """
         let r = await jsCall(body, timeout: 18)
         let hash = (r as? String) ?? ""
         log("③ 点击登录后 hash=\(hash.isEmpty ? "(空)" : hash)")
+
+        // 填表 / 按钮 状态
+        let fc = (await evalSync("window.__fillCheck || '无'")) as? String
+        let bc = (await evalSync("window.__btnCheck || '无'")) as? String
+        log("③ 填表: " + (fc ?? "?"))
+        log("③ 按钮: " + (bc ?? "?"))
 
         // 记录页面完整状态，便于诊断
         let st = (await evalSync("JSON.stringify({h:location.hash,n:document.querySelectorAll('input').length,url:location.href})")) as? String
