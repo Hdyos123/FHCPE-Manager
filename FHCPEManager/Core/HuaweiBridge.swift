@@ -40,6 +40,61 @@ final class HuaweiBridge: NSObject, ObservableObject {
 
     private override init() { super.init() }
 
+
+    /// 别名 → 真实路径
+    static let aliasToPath: [String: String] = [
+        "singal": "/api/device/signal",
+        "signal": "/api/device/signal",
+        "monitoringStatus": "/api/monitoring/status",
+        "monitoringTraffic": "/api/monitoring/traffic-statistics",
+        "mounthTraffic": "/api/monitoring/month_statistics",
+        "dialyTraffic": "/api/monitoring/daily-data-limit",
+        "netCurrentPlmn": "/api/net/current-plmn",
+        "hostList": "/api/wlan/host-list",
+        "hostInfo": "/api/system/HostInfo",
+        "wlanStatusSwitch": "/api/wlan/status-switch-settings",
+        "wlanBasic": "/api/wlan/basic-settings",
+        "netMode": "/api/net/net-mode",
+        "netModeList": "/api/net/net-mode-list",
+        "pinStatus": "/api/pin/status",
+        "wanInfo": "/api/ntwk/dualwaninfo",
+        "dualWanInfo": "/api/ntwk/dualwaninfo",
+        "deviceInformation": "/api/device/information",
+        "convergedStatus": "/api/monitoring/converged-status",
+        "smsCount": "/api/sms/sms-count",
+        "homeDataSwitch": "/api/dialup/mobile-dataswitch",
+        "ipv6Enable": "/api/ntwk/ipv6-enable",
+        "lockFreq": "/api/net/lock-freq",
+        "nbrcellinfo": "/api/device/nbrcellinfo",
+        "seccellinfo": "/api/device/seccellinfo",
+        "clearTraffic": "/api/monitoring/clear-traffic",
+        "ledCtrl": "/api/led/appctrlled",
+        "circleSwitch": "/api/led/circle-switch",
+        "appTurbo": "/api/appturbo/control",
+        "appTurboList": "/api/appturbo/acc-list",
+        "antennaType": "/api/device/antenna_type",
+        "autoUpdate": "/api/online-update/configuration",
+        "upgStatus": "/api/online-update/status",
+        "timeReboot": "/api/diagnosis/time_reboot",
+        "systemDeviceinfoex": "/api/system/deviceinfoex",
+        "connection": "/api/dialup/connection",
+        "voiceVolte": "/api/voice/volte",
+        "checkNotifications": "/api/monitoring/check-notifications",
+        "startDate": "/api/monitoring/start_date",
+        "setMobileTraffic": "/api/monitoring/start_date",
+    ]
+
+    static func realPath(_ alias: String) -> String {
+        if alias.hasPrefix("/api/") { return alias }
+        return aliasToPath[alias] ?? alias
+    }
+
+    /// 用于 JS 的路径（已做转义）
+    func jsPath(_ alias: String) -> String {
+        Self.realPath(alias).replacingOccurrences(of: "\\", with: "\\\\")
+                      .replacingOccurrences(of: "'", with: "\\'")
+    }
+
     // MARK: 原生 SCRAM 登录（照 CPEUltra 的实现）
     //
     // 1. GET  /api/webserver/SesTokInfo → SessionID + Token
