@@ -728,9 +728,9 @@ extension OppoBridge: WKNavigationDelegate {
             }
         }
 
-        // 探一次数据
-        let probe = await get("monitoringStatus")
-        if probe["__err"] != nil || probe.isEmpty {
+        // 探一次数据：直接解析首页文本
+        let probe = await fetchDashboard()
+        if probe.isEmpty {
             log("  会话已失效")
             return false
         }
@@ -739,12 +739,6 @@ extension OppoBridge: WKNavigationDelegate {
         log("✓ 会话有效，免登录成功")
         return true
     }
-}
-
-/// OPPO 用的装箱类型（与 HuaweiBridge 的私有类型同名不冲突）
-private struct OppoAnyBox: @unchecked Sendable {
-    let value: Any?
-    init(_ v: Any?) { value = v }
 
     /// 通过页面 $request 发 POST
     func post(_ alias: String, _ body: [String: Any] = [:]) async -> [String: Any] {
@@ -786,4 +780,10 @@ private struct OppoAnyBox: @unchecked Sendable {
         }
         return ["__err": "timeout"]
     }
+}
+
+/// OPPO 用的装箱类型（与 HuaweiBridge 的私有类型同名不冲突）
+private struct OppoAnyBox: @unchecked Sendable {
+    let value: Any?
+    init(_ v: Any?) { value = v }
 }
