@@ -563,16 +563,29 @@ final class HuaweiBridge: NSObject, ObservableObject {
 
             // 已进 home 页
             if h.lowercased().contains("home") && n <= 1 {
-                // 等页面 Vue 就绪
-                try? await Task.sleep(nanoseconds: 800_000_000)
+                if i == 0 { try? await Task.sleep(nanoseconds: 1_000_000_000) }
+
+                // 探针1：$request 是否存在
+                let hasReq = (await evalSync(
+                    "!!(document.querySelector('#app') && document.querySelector('#app').__vue_app__ && document.querySelector('#app').__vue_app__.config.globalProperties.$request)") as? Bool) ?? false
+                if !hasReq {
+                    lastProbe = "无$request"
+                    if i % 4 == 0 { log("④ 探针: \(lastProbe)") }
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    continue
+                }
+
+                // 探针2：真的取一次数据
                 let probe = await get("monitoringStatus")
                 if let err = probe["__err"] as? String {
-                    lastProbe = err
-                    log("④ 探针失败 code=\(err)")
-                } else if !probe.isEmpty {
+                    lastProbe = "code=" + err
+                    log("④ 探针失败 \(lastProbe)")
+                } else if probe.isEmpty {
+                    lastProbe = "空数据"
+                    log("④ 探针返回空")
+                } else {
                     ready = true
-                    log("④ 探针通过 · ✓ 登录成功")
-                    _ = await evalSync("location.hash='#/smallHome'")
+                    log("④ 探针通过 (\(probe.count) 项) · ✓ 登录成功")
                     return true
                 }
             }
@@ -611,10 +624,14 @@ final class HuaweiBridge: NSObject, ObservableObject {
           });
         }
         """
-        guard let s = await jsCall(js, timeout: 12) as? String,
-              let d = s.data(using: .utf8),
+        guard let s = await jsCall(js, timeout: 12) as? String else {
+            log("   \(alias) → jsCall 无返回（超时或异常）")
+            return ["__err": "no_return"]
+        }
+        guard let d = s.data(using: .utf8),
               let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
-            return [:]
+            log("   \(alias) → 解析失败: \(s.prefix(60))")
+            return ["__err": "parse"]
         }
         if let e = o["__err"] as? String {
             log("   接口 \(alias) → \(e)")
