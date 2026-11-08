@@ -156,7 +156,7 @@ final class HuaweiBridge: NSObject, ObservableObject {
     private func fetchSession(_ base: String) async -> Bool {
         guard let r = await rawGet(base, "/api/webserver/SesTokInfo"),
               let tk = Self.tag(r.body, "TokInfo") else { return false }
-        csrfToken = tk.unesc()
+        csrfToken = Self.unesc(tk)
         for (k, v) in r.cookies { sessionCookie = "\(k)=\(v)" }
         return true
     }
@@ -226,6 +226,15 @@ final class HuaweiBridge: NSObject, ObservableObject {
     }
 
     // MARK: 加密工具
+
+    static func unesc(_ s: String) -> String {
+        s.replacingOccurrences(of: "&#x2F;", with: "/")
+         .replacingOccurrences(of: "&#47;", with: "/")
+         .replacingOccurrences(of: "&quot;", with: "\"")
+         .replacingOccurrences(of: "&amp;", with: "&")
+         .replacingOccurrences(of: "&lt;", with: "<")
+         .replacingOccurrences(of: "&gt;", with: ">")
+    }
 
     static func esc(_ s: String) -> String {
         s.replacingOccurrences(of: "&", with: "&amp;")
